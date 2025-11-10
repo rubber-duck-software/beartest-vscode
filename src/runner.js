@@ -175,11 +175,31 @@ function createCommandHandlers(protocol, testRunner) {
           console.log(
             `\x1b[32m${prefix}✓\x1b[0m\x1b[90m ${event.data.name}\x1b[0m`
           );
-        } else if (
-          event.type === "test:fail" &&
-          event.data.details.type === "test"
-        ) {
+        } else if (event.type === "test:fail") {
+          // Log test/suite name
           console.log(`\x1b[31m${prefix}✗ ${event.data.name}\x1b[0m`);
+
+          // Log error details to match beartest's native behavior
+          const error = event.data.details.error;
+          if (error) {
+            // Beartest wraps errors in Error('[TEST FAILURE]', { cause: originalError })
+            // Extract the original error from the cause
+            const actualError = error.cause || error;
+
+            // Log error message
+            const errorMessage = actualError.message || String(actualError);
+            console.error(`${prefix}  ${errorMessage}`);
+
+            // Log stack trace
+            if (actualError.stack) {
+              const stackLines = actualError.stack.split('\n');
+              // Skip the first line if it's just the error message
+              const startIndex = stackLines[0].includes(errorMessage) ? 1 : 0;
+              for (let i = startIndex; i < stackLines.length; i++) {
+                console.error(`${prefix}  ${stackLines[i]}`);
+              }
+            }
+          }
         }
       }
 

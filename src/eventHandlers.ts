@@ -169,16 +169,18 @@ const handleTestFail = ({
       // Extract error message
       const error = details.error;
       let errorMessage = error.message || String(error);
+      let stackTrace = error.stack;
 
       // Beartest wraps errors - try to extract the cause
       if (error.cause && error.cause instanceof Error) {
         errorMessage = error.cause.message;
+        stackTrace = error.cause.stack; // Use the original error's stack
       }
 
       // Create test message with stack trace
       const message = new vscode.TestMessage(errorMessage);
-      if (error.stack) {
-        message.stackTrace = parseStackTrace(error.stack);
+      if (stackTrace) {
+        message.stackTrace = parseStackTrace(stackTrace);
       }
 
       run.failed(fileItem, message, details.duration_ms);
@@ -202,16 +204,18 @@ const handleTestFail = ({
     // Extract error message
     const error = details.error;
     let errorMessage = error.message || String(error);
+    let stackTrace = error.stack;
 
     // Beartest wraps errors - try to extract the cause
     if (error.cause && error.cause instanceof Error) {
       errorMessage = error.cause.message;
+      stackTrace = error.cause.stack; // Use the original error's stack
     }
 
     // Create test message with stack trace
     const message = new vscode.TestMessage(errorMessage);
-    if (error.stack) {
-      message.stackTrace = parseStackTrace(error.stack);
+    if (stackTrace) {
+      message.stackTrace = parseStackTrace(stackTrace);
     }
 
     run.failed(testItem, message, details.duration_ms);

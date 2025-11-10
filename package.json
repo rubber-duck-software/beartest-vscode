@@ -2,10 +2,12 @@
   "name": "beartest-vscode",
   "displayName": "Beartest Test Explorer",
   "description": "VSCode Test Explorer integration for beartest-js",
-  "version": "0.1.0",
-  "publisher": "beartest",
+  "version": "0.1.2",
+  "publisher": "rubber-duck-software",
+  "repository": "https://github.com/rubber-duck-software/beartest-vscode",
+  "icon": "./beartest-logo.png",
   "engines": {
-    "vscode": "^1.59.0"
+    "vscode": "^1.63.0"
   },
   "categories": [
     "Testing"
@@ -47,8 +49,8 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./ && npm run copy-runner",
-    "copy-runner": "cp src/runner.js out/runner.js",
+    "compile": "tsc -p ./ && npm run copy-assets",
+    "copy-assets": "cp src/runner.js out/runner.js",
     "watch": "tsc -watch -p ./",
     "pretest": "npm run compile",
     "lint": "eslint src --ext ts"
