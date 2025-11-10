@@ -1,6 +1,6 @@
-import * as vscode from 'vscode';
-import * as path from 'path';
-import { testItemData } from './types';
+import * as vscode from "vscode";
+import * as path from "path";
+import { testItemData } from "./types";
 
 /**
  * Discovers test files in the workspace and builds the file/folder hierarchy
@@ -19,8 +19,8 @@ export class TestDiscovery {
   async initialize(): Promise<void> {
     // Get test file pattern from configuration
     const pattern = vscode.workspace
-      .getConfiguration('beartest')
-      .get<string>('testFilePattern', '**/*.test.*');
+      .getConfiguration("beartest")
+      .get<string>("testFilePattern", "**/*.test.*");
 
     // Discover existing test files
     await this.discoverTestFiles(pattern);
@@ -35,7 +35,7 @@ export class TestDiscovery {
   private async discoverTestFiles(pattern: string): Promise<void> {
     const files = await vscode.workspace.findFiles(
       new vscode.RelativePattern(this.workspaceFolder, pattern),
-      '**/node_modules/**'
+      "**/node_modules/**"
     );
 
     for (const fileUri of files) {
@@ -47,7 +47,10 @@ export class TestDiscovery {
    * Create a TestItem for a test file, including parent folder items
    */
   private createFileTestItem(fileUri: vscode.Uri): vscode.TestItem {
-    const relativePath = path.relative(this.workspaceFolder.uri.fsPath, fileUri.fsPath);
+    const relativePath = path.relative(
+      this.workspaceFolder.uri.fsPath,
+      fileUri.fsPath
+    );
     const pathParts = relativePath.split(path.sep);
 
     // Build folder hierarchy
@@ -79,19 +82,15 @@ export class TestDiscovery {
 
     let fileItem = currentCollection.get(fileId);
     if (!fileItem) {
-      fileItem = this.controller.createTestItem(
-        fileId,
-        fileName,
-        fileUri
-      );
+      fileItem = this.controller.createTestItem(fileId, fileName, fileUri);
 
       // Store metadata for this file item
       testItemData.set(fileItem, {
-        type: 'file',
+        type: "file",
         filePath: fileUri.fsPath,
         fullName: fileName,
         nestingLevel: 0,
-        discovered: true
+        discovered: true,
       });
 
       currentCollection.add(fileItem);
@@ -104,7 +103,10 @@ export class TestDiscovery {
    * Set up file system watcher for test file changes
    */
   private setupFileWatcher(pattern: string): void {
-    const globPattern = new vscode.RelativePattern(this.workspaceFolder, pattern);
+    const globPattern = new vscode.RelativePattern(
+      this.workspaceFolder,
+      pattern
+    );
     this.fileWatcher = vscode.workspace.createFileSystemWatcher(globPattern);
 
     // Handle new test files
@@ -126,7 +128,10 @@ export class TestDiscovery {
    */
   private deleteFileTestItem(fileUri: vscode.Uri): void {
     const fileId = this.getFileId(fileUri.fsPath);
-    const relativePath = path.relative(this.workspaceFolder.uri.fsPath, fileUri.fsPath);
+    const relativePath = path.relative(
+      this.workspaceFolder.uri.fsPath,
+      fileUri.fsPath
+    );
     const pathParts = relativePath.split(path.sep);
 
     // Navigate to the file's parent collection
@@ -158,7 +163,10 @@ export class TestDiscovery {
    * Remove empty folder TestItems after a file is deleted
    */
   private cleanupEmptyFolders(fileUri: vscode.Uri): void {
-    const relativePath = path.relative(this.workspaceFolder.uri.fsPath, fileUri.fsPath);
+    const relativePath = path.relative(
+      this.workspaceFolder.uri.fsPath,
+      fileUri.fsPath
+    );
     const pathParts = relativePath.split(path.sep);
 
     // Work backwards from the parent folder

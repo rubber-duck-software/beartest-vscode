@@ -1,11 +1,11 @@
-import * as vscode from 'vscode';
+import * as vscode from "vscode";
 
 /**
  * Beartest event types emitted during test execution
  */
-export type BeartestEventType = 'test:start' | 'test:pass' | 'test:fail';
+export type BeartestEventType = "test:start" | "test:pass" | "test:fail";
 
-export type BeartestTestType = 'suite' | 'test' | undefined;
+export type BeartestTestType = "suite" | "test" | undefined;
 
 /**
  * Base structure for all beartest events
@@ -23,7 +23,7 @@ interface BaseBeartestEvent {
  * Event emitted when a test or suite starts
  */
 export interface TestStartEvent extends BaseBeartestEvent {
-  type: 'test:start';
+  type: "test:start";
   data: {
     name: string;
     nesting: number;
@@ -35,7 +35,7 @@ export interface TestStartEvent extends BaseBeartestEvent {
  * Event emitted when a test or suite passes
  */
 export interface TestPassEvent extends BaseBeartestEvent {
-  type: 'test:pass';
+  type: "test:pass";
   data: {
     name: string;
     nesting: number;
@@ -52,7 +52,7 @@ export interface TestPassEvent extends BaseBeartestEvent {
  * Event emitted when a test or suite fails
  */
 export interface TestFailEvent extends BaseBeartestEvent {
-  type: 'test:fail';
+  type: "test:fail";
   data: {
     name: string;
     nesting: number;
@@ -76,7 +76,7 @@ export type BeartestEvent = TestStartEvent | TestPassEvent | TestFailEvent;
  */
 export interface TestItemData {
   /** Type of test item */
-  type: 'file' | 'suite' | 'test';
+  type: "file" | "suite" | "test";
   /** Absolute file path for file-type items */
   filePath?: string;
   /** Full test name as reported by beartest */
