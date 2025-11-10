@@ -223,6 +223,9 @@ export const runWithProtocol = async (
         ...process.env,
         BEARTEST_MODULE_PATH: config.beartestModulePath,
         BEARTEST_SOCKET_PATH: socketPath,
+        // Force color output even when stdout/stderr are piped
+        // This ensures ANSI colors are preserved for display in VSCode's terminal
+        FORCE_COLOR: '1',
       };
 
       child = spawn(

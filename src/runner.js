@@ -7,6 +7,7 @@
 
 const { EventEmitter } = require("events");
 const net = require("net");
+const path = require("path");
 
 // ============================================================================
 // SocketProtocol - Handles JSON communication over Unix domain socket
@@ -148,10 +149,38 @@ function createCommandHandlers(protocol, testRunner) {
   const handleRunCommand = async (command) => {
     try {
       for await (const event of testRunner.run(command.files, command.only)) {
+        // Send event to extension
         protocol.send({
           type: "event",
           data: event,
         });
+
+        // Also output colored console messages matching beartest's standalone behavior
+        const prefix = "  ".repeat(event.data.nesting);
+        if (event.type === "test:start" && event.data.type === "suite") {
+          if (path.isAbsolute(event.data.name)) {
+            console.log(
+              `\x1b[36m${prefix}${
+                path.parse(event.data.name).name
+              } (${path.relative("./", event.data.name)})\x1b[0m`
+            );
+          } else {
+            console.log(`\x1b[36m${prefix}${event.data.name}\x1b[0m`);
+          }
+        } else if (
+          event.type === "test:pass" &&
+          event.data.details.type === "test" &&
+          !event.data.skip
+        ) {
+          console.log(
+            `\x1b[32m${prefix}✓\x1b[0m\x1b[90m ${event.data.name}\x1b[0m`
+          );
+        } else if (
+          event.type === "test:fail" &&
+          event.data.details.type === "test"
+        ) {
+          console.log(`\x1b[31m${prefix}✗ ${event.data.name}\x1b[0m`);
+        }
       }
 
       protocol.send({
