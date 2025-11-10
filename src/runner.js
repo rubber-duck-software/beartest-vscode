@@ -2,42 +2,51 @@
  * Beartest Runner Script
  *
  * This script runs in a child process and handles direct communication with the beartest module.
- * It uses a JSON protocol over stdout/stdin to communicate with the VSCode extension.
+ * It uses a Unix domain socket for structured data communication with the VSCode extension.
  */
 
 const { EventEmitter } = require("events");
+const net = require("net");
 
 // ============================================================================
-// MessageProtocol - Handles JSON communication over stdin/stdout
+// SocketProtocol - Handles JSON communication over Unix domain socket
 // ============================================================================
 
 /**
- * Creates a message protocol for JSON communication
+ * Creates a socket-based message protocol for JSON communication
  */
-function createMessageProtocol(
-  inputStream = process.stdin,
-  outputStream = process.stdout
-) {
+function createSocketProtocol(socketPath) {
   const emitter = new EventEmitter();
+  let socket = null;
   let buffer = "";
+  let isConnected = false;
 
   const send = (message) => {
+    if (!socket || !isConnected) {
+      throw new Error("Socket not connected");
+    }
     const json = JSON.stringify(message);
-    outputStream.write(`__BEARTEST_MESSAGE__${json}__END__\n`);
+    socket.write(json + "\n");
   };
 
   const sendError = (error) => {
-    send({
-      type: "error",
-      error: {
-        message: error.message,
-        stack: error.stack,
-      },
-    });
+    try {
+      send({
+        type: "error",
+        error: {
+          message: error.message,
+          stack: error.stack,
+        },
+      });
+    } catch (err) {
+      // If we can't send error over socket, log to stderr
+      console.error("Failed to send error over socket:", err);
+      console.error("Original error:", error);
+    }
   };
 
   const handleData = (chunk) => {
-    buffer += chunk;
+    buffer += chunk.toString();
 
     let newlineIndex;
     while ((newlineIndex = buffer.indexOf("\n")) !== -1) {
@@ -55,15 +64,32 @@ function createMessageProtocol(
     }
   };
 
-  const start = () => {
-    inputStream.setEncoding("utf8");
-    inputStream.on("data", handleData);
+  const connect = () => {
+    return new Promise((resolve, reject) => {
+      socket = net.createConnection(socketPath);
+
+      socket.on("connect", () => {
+        isConnected = true;
+        socket.setEncoding("utf8");
+        socket.on("data", handleData);
+        resolve();
+      });
+
+      socket.on("error", (err) => {
+        reject(new Error(`Socket connection error: ${err.message}`));
+      });
+
+      socket.on("close", () => {
+        isConnected = false;
+        emitter.emit("close");
+      });
+    });
   };
 
   return {
     send,
     sendError,
-    start,
+    connect,
     on: (event, handler) => emitter.on(event, handler),
   };
 }
@@ -227,16 +253,31 @@ function setupErrorHandlers(protocol) {
 /**
  * Initialize and start the runner
  */
-function main() {
-  const protocol = createMessageProtocol();
-  const beartest = loadBeartestModule(protocol);
-  const testRunner = createTestRunner(beartest);
-  const handleCommand = createCommandHandlers(protocol, testRunner);
+async function main() {
+  const socketPath = process.env.BEARTEST_SOCKET_PATH;
 
-  setupErrorHandlers(protocol);
-  protocol.on("command", handleCommand);
-  protocol.start();
-  protocol.send({ type: "ready" });
+  if (!socketPath) {
+    console.error("BEARTEST_SOCKET_PATH environment variable not set");
+    process.exit(1);
+  }
+
+  const protocol = createSocketProtocol(socketPath);
+
+  try {
+    // Connect to the socket server
+    await protocol.connect();
+
+    const beartest = loadBeartestModule(protocol);
+    const testRunner = createTestRunner(beartest);
+    const handleCommand = createCommandHandlers(protocol, testRunner);
+
+    setupErrorHandlers(protocol);
+    protocol.on("command", handleCommand);
+    protocol.send({ type: "ready" });
+  } catch (error) {
+    console.error("Failed to initialize runner:", error);
+    process.exit(1);
+  }
 }
 
 main();

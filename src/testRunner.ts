@@ -140,9 +140,6 @@ export class TestRunner {
       const command = config.get<string>("command", "node");
       const runtimeArgs = config.get<string[]>("runtimeArgs", []);
 
-      // Add inspect-brk flag for debugging
-      const debugRuntimeArgs = this.injectDebugFlag(command, runtimeArgs);
-
       // Find beartest module
       const beartestModulePath = await this.findBeartestModule();
 
@@ -162,7 +159,7 @@ export class TestRunner {
       // Protocol configuration with debug args
       const protocolConfig: ProtocolConfig = {
         command,
-        runtimeArgs: debugRuntimeArgs,
+        runtimeArgs: runtimeArgs,
         runnerScriptPath,
         beartestModulePath,
         cwd,
@@ -208,15 +205,6 @@ export class TestRunner {
       vscode.window.showErrorMessage(`Beartest debug failed: ${message}`);
       run.end();
     }
-  }
-
-  /**
-   * Inject --inspect-brk flag into runtime args for debugging
-   * Handles both direct node execution and wrapper commands (pnpm, npm, etc.)
-   */
-  private injectDebugFlag(_command: string, runtimeArgs: string[]): string[] {
-    // Append debug flag to runtime args
-    return [...runtimeArgs, "--inspect-brk=0"];
   }
 
   /**
