@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
-import { TestDiscovery } from './testDiscovery';
-import { TestRunner } from './testRunner';
+import { createTestDiscovery } from './testDiscovery';
+import { createTestProfiles } from './testRunner';
 
 /**
  * Extension activation
@@ -21,26 +21,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     return;
   }
 
-  // Set up discovery and runner for the workspace
-  const discoveries: TestDiscovery[] = [];
-
+  // Set up discovery for each workspace folder
   for (const workspaceFolder of workspaceFolders) {
-    const discovery = new TestDiscovery(controller, workspaceFolder);
-    await discovery.initialize();
-    discoveries.push(discovery);
+    const discovery = await createTestDiscovery(controller, workspaceFolder);
     context.subscriptions.push(discovery);
   }
 
-  // Set up test runner
-  const runner = new TestRunner(controller);
-
-  // Create run profile
-  const runProfile = runner.createRunProfile();
-  context.subscriptions.push(runProfile);
-
-  // Create debug profile
-  const debugProfile = runner.createDebugProfile();
-  context.subscriptions.push(debugProfile);
+  // Set up test runner profiles
+  const { runProfile, debugProfile } = createTestProfiles(controller);
+  context.subscriptions.push(runProfile, debugProfile);
 
   // Listen for configuration changes
   context.subscriptions.push(

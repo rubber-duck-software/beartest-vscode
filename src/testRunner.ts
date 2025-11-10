@@ -1,200 +1,97 @@
 import * as vscode from "vscode";
 import * as path from "path";
-import { BeartestEvent } from "./types";
+import { testItemData } from "./types";
 import {
   runWithProtocol,
   ProtocolConfig,
   ProtocolHandlers,
-} from "./protocol/BeartestProtocolClient";
-import {
-  getTestFilesToRun,
-  buildOnlyFilter,
-} from "./testItems/testItemRegistry";
-import { handleBeartestEvent } from "./events/eventHandlers";
+} from "./beartestProtocolClient";
+import { getTestFilesToRun } from "./testItemRegistry";
+import { handleBeartestEvent } from "./eventHandlers";
 
 /**
- * Handles test execution and maps beartest events to VSCode Test Explorer
+ * Create test profiles for the given controller
+ * Returns an object with run and debug profiles
  */
-export class TestRunner {
-  // Map of test item IDs to TestItems for quick lookup
-  private testItemMap = new Map<string, vscode.TestItem>();
+export const createTestProfiles = (controller: vscode.TestController) => {
+  const testItemMap = new Map<string, vscode.TestItem>();
 
-  constructor(private controller: vscode.TestController) {}
+  const runProfile = controller.createRunProfile(
+    "Run Tests",
+    vscode.TestRunProfileKind.Run,
+    (request, token) =>
+      executeTests(request, controller, testItemMap, token, false),
+    true // isDefault
+  );
 
-  /**
-   * Create a run profile for executing tests
-   */
-  createRunProfile(): vscode.TestRunProfile {
-    return this.controller.createRunProfile(
-      "Run Tests",
-      vscode.TestRunProfileKind.Run,
-      (request, token) => this.runTests(request, token),
-      true // isDefault
-    );
+  const debugProfile = controller.createRunProfile(
+    "Debug Tests",
+    vscode.TestRunProfileKind.Debug,
+    (request, token) =>
+      executeTests(request, controller, testItemMap, token, true),
+    false
+  );
+
+  return { runProfile, debugProfile };
+};
+
+/**
+ * Execute tests with the beartest protocol
+ */
+const executeTests = async (
+  request: vscode.TestRunRequest,
+  controller: vscode.TestController,
+  testItemMap: Map<string, vscode.TestItem>,
+  token: vscode.CancellationToken,
+  isDebug: boolean
+): Promise<void> => {
+  const run = controller.createTestRun(request);
+  const testFiles = getTestFilesToRun(request, controller);
+
+  if (isDebug && testFiles.length === 0) {
+    vscode.window.showWarningMessage("No test files selected for debugging");
+    run.end();
+    return;
   }
 
-  /**
-   * Create a debug profile for debugging tests
-   */
-  createDebugProfile(): vscode.TestRunProfile {
-    return this.controller.createRunProfile(
-      "Debug Tests",
-      vscode.TestRunProfileKind.Debug,
-      (request, token) => this.debugTests(request, token),
-      false
-    );
-  }
+  try {
+    // Gather configuration
+    const config = vscode.workspace.getConfiguration("beartest");
+    const command = config.get<string>("command", "node");
+    const runtimeArgs = config.get<string[]>("runtimeArgs", []);
+    const beartestModulePath = await findBeartestModule();
+    const runnerScriptPath = path.join(__dirname, "runner.js");
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    const cwd = workspaceFolders?.[0]?.uri.fsPath || process.cwd();
 
-  /**
-   * Execute tests based on the test request
-   */
-  private async runTests(
-    request: vscode.TestRunRequest,
-    token: vscode.CancellationToken
-  ): Promise<void> {
-    const run = this.controller.createTestRun(request);
-    const testFiles = getTestFilesToRun(request, this.controller);
+    const protocolConfig: ProtocolConfig = {
+      command,
+      runtimeArgs,
+      runnerScriptPath,
+      beartestModulePath,
+      cwd,
+    };
 
-    try {
-      // Get configuration
-      const config = vscode.workspace.getConfiguration("beartest");
-      const command = config.get<string>("command", "node");
-      const runtimeArgs = config.get<string[]>("runtimeArgs", []);
-
-      // Find beartest module
-      const beartestModulePath = await this.findBeartestModule();
-
-      // Get runner script path
-      const runnerScriptPath = path.join(__dirname, "runner.js");
-
-      // Get workspace folder for cwd
-      const workspaceFolders = vscode.workspace.workspaceFolders;
-      const cwd = workspaceFolders?.[0]?.uri.fsPath || process.cwd();
-
-      // Track suite stack for nesting
-      const suiteStack: vscode.TestItem[] = [];
-
-      // Build 'only' filter for granular test execution
-      const only = buildOnlyFilter(request);
-
-      // Protocol configuration
-      const protocolConfig: ProtocolConfig = {
-        command,
-        runtimeArgs,
-        runnerScriptPath,
-        beartestModulePath,
-        cwd,
-      };
-
-      // Protocol handlers
-      const handlers: ProtocolHandlers = {
-        onEvent: async (event) => {
-          handleBeartestEvent({
-            event,
-            run,
-            suiteStack,
-            controller: this.controller,
-            testItemMap: this.testItemMap,
-          });
-        },
-        onOutput: (output) => {
-          // VSCode's TestRun.appendOutput requires CRLF line endings for proper display
-          // Convert LF to CRLF to ensure ANSI colors render correctly
-          const normalizedOutput = output.replace(/\r?\n/g, "\r\n");
-          run.appendOutput(normalizedOutput);
-        },
-        onComplete: () => {},
-        onError: (error) => {
-          vscode.window.showErrorMessage(
-            `Beartest execution failed: ${error.message}`
-          );
-        },
-      };
-
-      // Run tests using protocol
-      await runWithProtocol(protocolConfig, handlers, testFiles, only, token);
-
-      run.end();
-    } catch (error) {
-      // If there's an error running beartest, report it
-      const message = error instanceof Error ? error.message : String(error);
-      vscode.window.showErrorMessage(`Beartest execution failed: ${message}`);
-      run.end();
-    }
-  }
-
-  /**
-   * Debug tests (similar to run but with debugger attached)
-   */
-  private async debugTests(
-    request: vscode.TestRunRequest,
-    token: vscode.CancellationToken
-  ): Promise<void> {
-    const run = this.controller.createTestRun(request);
-    const testFiles = getTestFilesToRun(request, this.controller);
-
-    if (testFiles.length === 0) {
-      vscode.window.showWarningMessage("No test files selected for debugging");
-      run.end();
-      return;
-    }
-
-    try {
-      // Get configuration
-      const config = vscode.workspace.getConfiguration("beartest");
-      const command = config.get<string>("command", "node");
-      const runtimeArgs = config.get<string[]>("runtimeArgs", []);
-
-      // Find beartest module
-      const beartestModulePath = await this.findBeartestModule();
-
-      // Get runner script path
-      const runnerScriptPath = path.join(__dirname, "runner.js");
-
-      // Get workspace folder for cwd
-      const workspaceFolders = vscode.workspace.workspaceFolders;
-      const cwd = workspaceFolders?.[0]?.uri.fsPath || process.cwd();
-
-      // Track suite stack for nesting
-      const suiteStack: vscode.TestItem[] = [];
-
-      // Build 'only' filter for granular test execution
-      const only = buildOnlyFilter(request);
-
-      // Protocol configuration with debug args
-      const protocolConfig: ProtocolConfig = {
-        command,
-        runtimeArgs: runtimeArgs,
-        runnerScriptPath,
-        beartestModulePath,
-        cwd,
-      };
-
-      // Protocol handlers
-      const handlers: ProtocolHandlers = {
-        onEvent: async (event) => {
-          handleBeartestEvent({
-            event,
-            run,
-            suiteStack,
-            controller: this.controller,
-            testItemMap: this.testItemMap,
-          });
-        },
-        onOutput: (output) => {
-          // VSCode's TestRun.appendOutput requires CRLF line endings for proper display
-          // Convert LF to CRLF to ensure ANSI colors render correctly
-          const normalizedOutput = output.replace(/\r?\n/g, "\r\n");
-          run.appendOutput(normalizedOutput);
-        },
-        onComplete: () => {},
-        onError: (error) => {
-          vscode.window.showErrorMessage(
-            `Beartest execution failed: ${error.message}`
-          );
-        },
+    const suiteStack: vscode.TestItem[] = [];
+    const handlers: ProtocolHandlers = {
+      onEvent: async (event) => {
+        handleBeartestEvent({
+          event,
+          run,
+          suiteStack,
+          controller,
+          testItemMap,
+        });
+      },
+      onOutput: (output) => run.appendOutput(normalizeOutput(output)),
+      onComplete: () => {},
+      onError: (error) => {
+        vscode.window.showErrorMessage(
+          `Beartest execution failed: ${error.message}`
+        );
+      },
+      ...(isDebug && {
         onDebugPort: async (port) => {
-          // Attach debugger to the detected port
           const debugConfig: vscode.DebugConfiguration = {
             type: "node",
             request: "attach",
@@ -204,86 +101,151 @@ export class TestRunner {
           };
           await vscode.debug.startDebugging(undefined, debugConfig);
         },
-      };
+      }),
+    };
 
-      // Run tests using protocol with debugging enabled
-      await runWithProtocol(protocolConfig, handlers, testFiles, only, token);
+    const only = buildOnlyFilter(request);
+    await runWithProtocol(protocolConfig, handlers, testFiles, only, token);
+    run.end();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const prefix = isDebug ? "Beartest debug" : "Beartest execution";
+    vscode.window.showErrorMessage(`${prefix} failed: ${message}`);
+    run.end();
+  }
+};
 
-      run.end();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      vscode.window.showErrorMessage(`Beartest debug failed: ${message}`);
-      run.end();
-    }
+/**
+ * Normalize output for VSCode test run display (LF -> CRLF)
+ * Called multiple times per test run (once per output chunk)
+ */
+const normalizeOutput = (output: string): string =>
+  output.replace(/\r?\n/g, "\r\n");
+
+/**
+ * Find the beartest module in node_modules using Node's module resolution
+ * Inspired by Vitest's multi-strategy package resolution approach
+ */
+const findBeartestModule = async (): Promise<string> => {
+  const workspaceFolders = vscode.workspace.workspaceFolders;
+  if (!workspaceFolders || workspaceFolders.length === 0) {
+    throw new Error("No workspace folder found");
   }
 
-  /**
-   * Find the beartest module in node_modules using Node's module resolution
-   * Inspired by Vitest's multi-strategy package resolution approach
-   */
-  private async findBeartestModule(): Promise<string> {
-    const workspaceFolders = vscode.workspace.workspaceFolders;
-    if (!workspaceFolders || workspaceFolders.length === 0) {
-      throw new Error("No workspace folder found");
-    }
+  const errors: string[] = [];
 
-    const errors: string[] = [];
-
-    // Strategy 1: Try each workspace folder using Node's module resolution
-    for (const folder of workspaceFolders) {
-      try {
-        // Use Node's module resolution from the workspace folder's context
-        // This respects node_modules, package.json, and proper resolution order
-        const beartestPath = require.resolve("beartest-js", {
-          paths: [folder.uri.fsPath],
-        });
-        return beartestPath;
-      } catch (err) {
-        const errorMsg = err instanceof Error ? err.message : String(err);
-        errors.push(`  ${folder.name}: ${errorMsg}`);
-      }
-    }
-
-    // Strategy 2: Development mode - check for beartest-js sibling directory
-    // This handles the case where beartest-js is being developed alongside the extension
-    for (const folder of workspaceFolders) {
-      try {
-        // Check for beartest-js in parent directory (development scenario)
-        const parentDir = path.dirname(folder.uri.fsPath);
-        const devBeartestPath = path.join(parentDir, "beartest-js", "index.js");
-
-        require.resolve(devBeartestPath);
-        return devBeartestPath;
-      } catch {
-        // Continue to next folder
-      }
-    }
-
-    // Strategy 3: Check relative to the extension's installation directory
+  // Strategy 1: Try each workspace folder using Node's module resolution
+  for (const folder of workspaceFolders) {
     try {
-      const extensionDir = path.dirname(__dirname);
-      const siblingBeartestPath = path.join(
-        path.dirname(extensionDir),
-        "beartest-js",
-        "index.js"
-      );
+      const beartestPath = require.resolve("beartest-js", {
+        paths: [folder.uri.fsPath],
+      });
+      return beartestPath;
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      errors.push(`  ${folder.name}: ${errorMsg}`);
+    }
+  }
 
-      require.resolve(siblingBeartestPath);
-      return siblingBeartestPath;
+  // Strategy 2: Development mode - check for beartest-js sibling directory
+  for (const folder of workspaceFolders) {
+    try {
+      const parentDir = path.dirname(folder.uri.fsPath);
+      const devBeartestPath = path.join(parentDir, "beartest-js", "index.js");
+      require.resolve(devBeartestPath);
+      return devBeartestPath;
     } catch {
-      // Continue to error
+      // Continue to next folder
+    }
+  }
+
+  // Strategy 3: Check relative to the extension's installation directory
+  try {
+    const extensionDir = path.dirname(__dirname);
+    const siblingBeartestPath = path.join(
+      path.dirname(extensionDir),
+      "beartest-js",
+      "index.js"
+    );
+    require.resolve(siblingBeartestPath);
+    return siblingBeartestPath;
+  } catch {
+    // Continue to error
+  }
+
+  // If not found, provide helpful error message
+  const errorMessage = [
+    "Beartest module not found in any workspace folder.",
+    "Please install beartest by running:",
+    "  npm install --save-dev beartest-js",
+    "",
+    "Searched in:",
+    ...errors,
+  ].join("\n");
+
+  throw new Error(errorMessage);
+};
+
+/**
+ * Build the 'only' filter for granular test execution
+ */
+export const buildOnlyFilter = (
+  request: vscode.TestRunRequest
+): string[] | undefined => {
+  // If no specific items are included, run all tests (no filter)
+  if (!request.include || request.include.length === 0) {
+    return undefined;
+  }
+
+  // Check if any included item is a nested test/suite (not a file)
+  const hasNestedTests = request.include.some((item) => {
+    const data = testItemData.get(item);
+    return data?.type !== "file";
+  });
+
+  // If only files are selected, no need for 'only' filter
+  if (!hasNestedTests) {
+    return undefined;
+  }
+
+  // Build path for the first nested test/suite
+  const firstNestedItem = request.include.find((item) => {
+    const data = testItemData.get(item);
+    return data?.type !== "file";
+  });
+
+  if (!firstNestedItem) {
+    return undefined;
+  }
+
+  // Build the path from file to this test
+  return buildTestPath(firstNestedItem);
+};
+
+/**
+ * Build the path of test/suite names from file to the given test item
+ */
+const buildTestPath = (item: vscode.TestItem): string[] => {
+  const path: string[] = [];
+  let current: vscode.TestItem | undefined = item;
+
+  // Traverse up to the file level, collecting names
+  while (current) {
+    const data = testItemData.get(current);
+
+    // Stop when we reach the file level
+    if (data?.type === "file") {
+      break;
     }
 
-    // If not found, provide helpful error message
-    const errorMessage = [
-      "Beartest module not found in any workspace folder.",
-      "Please install beartest by running:",
-      "  npm install --save-dev beartest-js",
-      "",
-      "Searched in:",
-      ...errors,
-    ].join("\n");
+    // Add the test/suite name to the path (at the beginning since we're going up)
+    if (data?.fullName) {
+      path.unshift(data.fullName);
+    }
 
-    throw new Error(errorMessage);
+    // Move to parent
+    current = current.parent;
   }
-}
+
+  return path;
+};

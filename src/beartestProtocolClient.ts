@@ -4,7 +4,7 @@ import * as net from "net";
 import * as path from "path";
 import * as os from "os";
 import * as fs from "fs";
-import { BeartestEvent } from "../types";
+import { BeartestEvent } from "./types";
 
 /** Commands sent from extension to runner (via socket as newline-delimited JSON) */
 export type RunnerCommand =
@@ -225,7 +225,7 @@ export const runWithProtocol = async (
         BEARTEST_SOCKET_PATH: socketPath,
         // Force color output even when stdout/stderr are piped
         // This ensures ANSI colors are preserved for display in VSCode's terminal
-        FORCE_COLOR: '1',
+        FORCE_COLOR: "1",
       };
 
       child = spawn(

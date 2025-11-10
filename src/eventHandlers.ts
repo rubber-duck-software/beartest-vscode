@@ -1,10 +1,10 @@
 import * as vscode from "vscode";
-import { BeartestEvent } from "../types";
+import { BeartestEvent } from "./types";
 import {
   createOrGetTestItem,
   findFileTestItem,
   getTestItem,
-} from "../testItems/testItemRegistry";
+} from "./testItemRegistry";
 
 /**
  * Functional utilities for handling beartest events and updating VSCode test runs

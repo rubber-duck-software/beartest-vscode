@@ -1,9 +1,5 @@
 import * as vscode from "vscode";
-import { testItemData } from "../types";
-
-/**
- * Pure functions and utilities for managing VSCode TestItems
- */
+import { testItemData } from "./types";
 
 /**
  * Create a unique ID for a test item based on parent, name, and nesting level
@@ -202,68 +198,4 @@ export const createOrGetTestItem = ({
   }
 
   return testItem;
-};
-
-/**
- * Build the path of test/suite names from file to the given test item
- */
-const buildTestPath = (item: vscode.TestItem): string[] => {
-  const path: string[] = [];
-  let current: vscode.TestItem | undefined = item;
-
-  // Traverse up to the file level, collecting names
-  while (current) {
-    const data = testItemData.get(current);
-
-    // Stop when we reach the file level
-    if (data?.type === "file") {
-      break;
-    }
-
-    // Add the test/suite name to the path (at the beginning since we're going up)
-    if (data?.fullName) {
-      path.unshift(data.fullName);
-    }
-
-    // Move to parent
-    current = current.parent;
-  }
-
-  return path;
-};
-
-/**
- * Build the 'only' filter for granular test execution
- */
-export const buildOnlyFilter = (
-  request: vscode.TestRunRequest
-): string[] | undefined => {
-  // If no specific items are included, run all tests (no filter)
-  if (!request.include || request.include.length === 0) {
-    return undefined;
-  }
-
-  // Check if any included item is a nested test/suite (not a file)
-  const hasNestedTests = request.include.some((item) => {
-    const data = testItemData.get(item);
-    return data?.type !== "file";
-  });
-
-  // If only files are selected, no need for 'only' filter
-  if (!hasNestedTests) {
-    return undefined;
-  }
-
-  // Build path for the first nested test/suite
-  const firstNestedItem = request.include.find((item) => {
-    const data = testItemData.get(item);
-    return data?.type !== "file";
-  });
-
-  if (!firstNestedItem) {
-    return undefined;
-  }
-
-  // Build the path from file to this test
-  return buildTestPath(firstNestedItem);
 };
