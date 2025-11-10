@@ -4,6 +4,23 @@ import { spawn } from "child_process";
 import { BeartestEvent, testItemData, TestItemData } from "./types";
 
 /**
+ * IPC Protocol Types for communicating with the runner process
+ */
+
+/** Commands sent from extension to runner */
+type RunnerCommand =
+  | { type: "run"; files: string[]; only?: string[] }
+  | { type: "cancel" }
+  | { type: "shutdown" };
+
+/** Responses sent from runner to extension */
+type RunnerResponse =
+  | { type: "ready" }
+  | { type: "event"; data: BeartestEvent }
+  | { type: "complete"; success: boolean }
+  | { type: "error"; error: { message: string; stack?: string } };
+
+/**
  * Handles test execution and maps beartest events to VSCode Test Explorer
  */
 export class TestRunner {
@@ -52,23 +69,31 @@ export class TestRunner {
       const command = config.get<string>("command", "node");
       const runtimeArgs = config.get<string[]>("runtimeArgs", []);
 
-      // Find beartest CLI
-      const beartestPath = await this.findBeartestModule();
-      const beartestCliPath = path.join(path.dirname(beartestPath), "cli.js");
+      // Find beartest module
+      const beartestModulePath = await this.findBeartestModule();
+
+      // Get runner script path (in the same directory as this extension's compiled code)
+      const runnerScriptPath = path.join(__dirname, "runner.js");
 
       // Track suite stack for nesting
       const suiteStack: vscode.TestItem[] = [];
 
-      // Spawn beartest process with custom command
+      // Build 'only' filter for granular test execution
+      const only = this.buildOnlyFilter(request);
+
+      // Spawn runner process with IPC
       await this.runBeartestProcess(
         command,
         runtimeArgs,
-        beartestCliPath,
+        runnerScriptPath,
+        beartestModulePath,
         testFiles,
         token,
+        run,
         async (event) => {
           await this.handleBeartestEvent(event, run, suiteStack, () => {});
-        }
+        },
+        only
       );
 
       run.end();
@@ -81,59 +106,88 @@ export class TestRunner {
   }
 
   /**
-   * Spawn beartest process and handle events
+   * Spawn beartest runner process and handle IPC communication
    */
   private async runBeartestProcess(
     command: string,
     runtimeArgs: string[],
-    beartestCliPath: string,
+    runnerScriptPath: string,
+    beartestModulePath: string,
     testFiles: string[],
     token: vscode.CancellationToken,
-    onEvent: (event: BeartestEvent) => Promise<void>
+    run: vscode.TestRun,
+    onEvent: (event: BeartestEvent) => Promise<void>,
+    only?: string[]
   ): Promise<void> {
     return new Promise((resolve, reject) => {
       // Get workspace folder for cwd
       const workspaceFolders = vscode.workspace.workspaceFolders;
       const cwd = workspaceFolders?.[0]?.uri.fsPath || process.cwd();
 
-      // Spawn beartest process with configured command and runtime args
-      const child = spawn(command, [...runtimeArgs, beartestCliPath, ...testFiles], {
+      const env = {
+        ...process.env,
+        BEARTEST_MODULE_PATH: beartestModulePath,
+      };
+
+      const child = spawn(command, [...runtimeArgs, runnerScriptPath], {
         cwd,
-        stdio: ["ignore", "pipe", "pipe"],
+        stdio: ["ignore", "pipe", "pipe", "ipc"],
+        env,
       });
-
-      let stdoutBuffer = "";
       let stderrBuffer = "";
+      let isReady = false;
 
-      // Handle stdout - parse JSON events
-      child.stdout?.on("data", async (data) => {
-        stdoutBuffer += data.toString();
-        const lines = stdoutBuffer.split("\n");
-        stdoutBuffer = lines.pop() || ""; // Keep incomplete line in buffer
+      // Handle IPC messages from runner
+      child.on("message", async (message: RunnerResponse) => {
+        switch (message.type) {
+          case "ready":
+            // Runner is ready, send the run command
+            isReady = true;
+            const runCommand: RunnerCommand = {
+              type: "run",
+              files: testFiles,
+              ...(only && only.length > 0 ? { only } : {}),
+            };
+            child.send(runCommand);
+            break;
 
-        for (const line of lines) {
-          if (line.trim()) {
-            try {
-              const event = JSON.parse(line) as BeartestEvent;
-              await onEvent(event);
-            } catch (err) {
-              console.error("Failed to parse beartest event:", line, err);
-            }
-          }
+          case "event":
+            // Forward beartest event to handler
+            await onEvent(message.data);
+            break;
+
+          case "complete":
+            // Test run completed
+            resolve();
+            break;
+
+          case "error":
+            // Runner encountered an error
+            reject(new Error(message.error.message));
+            break;
         }
       });
 
-      // Collect stderr for error reporting
+      // Capture stdout and forward to test results window
+      child.stdout?.on("data", (data) => {
+        const output = data.toString();
+        run.appendOutput(output);
+      });
+
+      // Capture stderr and forward to test results window
       child.stderr?.on("data", (data) => {
-        stderrBuffer += data.toString();
+        const output = data.toString();
+        stderrBuffer += output;
+        run.appendOutput(output);
       });
 
       // Handle process exit
       child.on("close", (code) => {
-        if (code === 0) {
+        if (code === 0 || code === null) {
           resolve();
         } else {
-          const errorMessage = stderrBuffer || `Beartest exited with code ${code}`;
+          const errorMessage =
+            stderrBuffer || `Runner exited with code ${code}`;
           reject(new Error(errorMessage));
         }
       });
@@ -145,7 +199,20 @@ export class TestRunner {
 
       // Handle cancellation
       token.onCancellationRequested(() => {
-        child.kill();
+        if (isReady && child.connected) {
+          // Send cancel command to runner for graceful shutdown
+          const cancelCommand: RunnerCommand = { type: "cancel" };
+          child.send(cancelCommand);
+
+          // Force kill after timeout
+          setTimeout(() => {
+            if (!child.killed) {
+              child.kill();
+            }
+          }, 1000);
+        } else {
+          child.kill();
+        }
         resolve();
       });
     });
@@ -170,9 +237,11 @@ export class TestRunner {
     const command = config.get<string>("command", "node");
     const runtimeArgs = config.get<string[]>("runtimeArgs", []);
 
-    // Find beartest CLI
-    const beartestPath = await this.findBeartestModule();
-    const beartestCliPath = path.join(path.dirname(beartestPath), "cli.js");
+    // Find beartest module
+    const beartestModulePath = await this.findBeartestModule();
+
+    // Get runner script path
+    const runnerScriptPath = path.join(__dirname, "runner.js");
 
     // Get workspace folder for cwd
     const workspaceFolders = vscode.workspace.workspaceFolders;
@@ -183,11 +252,14 @@ export class TestRunner {
       type: "node",
       request: "launch",
       name: "Debug Beartest",
-      program: beartestCliPath,
-      args: testFiles,
+      program: runnerScriptPath,
+      args: [],
       cwd,
       console: "integratedTerminal",
       internalConsoleOptions: "neverOpen",
+      env: {
+        BEARTEST_MODULE_PATH: beartestModulePath,
+      },
     };
 
     // Use custom command if not default
@@ -485,6 +557,73 @@ export class TestRunner {
     nesting: number
   ): string {
     return `${parent.id}::${nesting}::${name}`;
+  }
+
+  /**
+   * Build the 'only' filter for granular test execution
+   * Returns an array of test names forming the path to the selected test/suite
+   */
+  private buildOnlyFilter(
+    request: vscode.TestRunRequest
+  ): string[] | undefined {
+    // If no specific items are included, run all tests (no filter)
+    if (!request.include || request.include.length === 0) {
+      return undefined;
+    }
+
+    // Check if any included item is a nested test/suite (not a file)
+    const hasNestedTests = request.include.some((item) => {
+      const data = testItemData.get(item);
+      return data?.type !== "file";
+    });
+
+    // If only files are selected, no need for 'only' filter
+    if (!hasNestedTests) {
+      return undefined;
+    }
+
+    // Build path for the first nested test/suite
+    // Note: If multiple tests are selected, beartest's 'only' parameter
+    // currently only supports filtering to a single test path
+    const firstNestedItem = request.include.find((item) => {
+      const data = testItemData.get(item);
+      return data?.type !== "file";
+    });
+
+    if (!firstNestedItem) {
+      return undefined;
+    }
+
+    // Build the path from file to this test
+    return this.buildTestPath(firstNestedItem);
+  }
+
+  /**
+   * Build the path of test/suite names from the file to the given test item
+   */
+  private buildTestPath(item: vscode.TestItem): string[] {
+    const path: string[] = [];
+    let current: vscode.TestItem | undefined = item;
+
+    // Traverse up to the file level, collecting names
+    while (current) {
+      const data = testItemData.get(current);
+
+      // Stop when we reach the file level
+      if (data?.type === "file") {
+        break;
+      }
+
+      // Add the test/suite name to the path (at the beginning since we're going up)
+      if (data?.fullName) {
+        path.unshift(data.fullName);
+      }
+
+      // Move to parent
+      current = current.parent;
+    }
+
+    return path;
   }
 
   /**
