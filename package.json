@@ -27,9 +27,12 @@
       "title": "Beartest",
       "properties": {
         "beartest.testFilePattern": {
-          "type": "string",
-          "default": "**/*.test.*",
-          "description": "Glob pattern for discovering test files"
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": ["**/*.test.*"],
+          "description": "Glob patterns for discovering test files"
         },
         "beartest.command": {
           "type": "string",

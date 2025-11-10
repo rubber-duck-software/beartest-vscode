@@ -4,7 +4,7 @@ VSCode extension that integrates [beartest](https://github.com/rubber-duck-softw
 
 ## Features
 
-- **Automatic Test Discovery**: Discovers test files matching `**/*.test.*` pattern
+- **Automatic Test Discovery**: Discovers test files matching configurable glob patterns
 - **File/Folder Hierarchy**: Shows tests organized by your project structure
 - **Run Tests**: Execute individual tests, test suites, or entire files
 - **Debug Tests**: Debug your tests with breakpoints using VSCode's debugger
@@ -55,13 +55,13 @@ Configure the extension in your VSCode settings:
 
 ```json
 {
-  "beartest.testFilePattern": "**/*.test.*"
+  "beartest.testFilePattern": ["**/*.test.*", "**/*.spec.*"]
 }
 ```
 
 ### Available Settings
 
-- `beartest.testFilePattern`: Glob pattern for discovering test files (default: `**/*.test.*`)
+- `beartest.testFilePattern`: Array of glob patterns for discovering test files (default: `["**/*.test.*"]`)
 
 ## How It Works
 

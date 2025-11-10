@@ -166,35 +166,48 @@ export const createTestDiscovery = async (
   controller: vscode.TestController,
   workspaceFolder: vscode.WorkspaceFolder
 ): Promise<TestDiscovery> => {
-  // Get test file pattern from configuration
-  const pattern = vscode.workspace
+  // Get test file patterns from configuration
+  const patterns = vscode.workspace
     .getConfiguration("beartest")
-    .get<string>("testFilePattern", "**/*.test.*");
+    .get<string[]>("testFilePattern", ["**/*.test.*"]);
 
-  // Discover existing test files
-  const files = await vscode.workspace.findFiles(
-    new vscode.RelativePattern(workspaceFolder, pattern),
-    "**/node_modules/**"
-  );
-
-  for (const fileUri of files) {
-    createFileTestItem(fileUri, controller, workspaceFolder);
+  // Discover existing test files for all patterns
+  const fileUriSet = new Set<string>();
+  for (const pattern of patterns) {
+    const files = await vscode.workspace.findFiles(
+      new vscode.RelativePattern(workspaceFolder, pattern),
+      "**/node_modules/**"
+    );
+    for (const fileUri of files) {
+      fileUriSet.add(fileUri.fsPath);
+    }
   }
 
-  // Set up file system watcher
-  const globPattern = new vscode.RelativePattern(workspaceFolder, pattern);
-  const fileWatcher = vscode.workspace.createFileSystemWatcher(globPattern);
+  // Create test items for unique files
+  for (const filePath of fileUriSet) {
+    createFileTestItem(vscode.Uri.file(filePath), controller, workspaceFolder);
+  }
 
-  fileWatcher.onDidCreate((uri) => {
-    createFileTestItem(uri, controller, workspaceFolder);
-  });
+  // Set up file system watchers for all patterns
+  const fileWatchers = patterns.map((pattern) => {
+    const globPattern = new vscode.RelativePattern(workspaceFolder, pattern);
+    const watcher = vscode.workspace.createFileSystemWatcher(globPattern);
 
-  fileWatcher.onDidDelete((uri) => {
-    deleteFileTestItem(uri, controller, workspaceFolder);
+    watcher.onDidCreate((uri) => {
+      createFileTestItem(uri, controller, workspaceFolder);
+    });
+
+    watcher.onDidDelete((uri) => {
+      deleteFileTestItem(uri, controller, workspaceFolder);
+    });
+
+    return watcher;
   });
 
   // Return disposable object
   return {
-    dispose: () => fileWatcher.dispose(),
+    dispose: () => {
+      fileWatchers.forEach((watcher) => watcher.dispose());
+    },
   };
 };

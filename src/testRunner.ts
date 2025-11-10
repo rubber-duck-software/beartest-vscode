@@ -58,7 +58,13 @@ const executeTests = async (
     // Gather configuration
     const config = vscode.workspace.getConfiguration("beartest");
     const command = config.get<string>("command", "node");
-    const runtimeArgs = config.get<string[]>("runtimeArgs", []);
+    let runtimeArgs = config.get<string[]>("runtimeArgs", []);
+
+    // Add --inspect for debugging
+    if (isDebug) {
+      runtimeArgs = [...runtimeArgs, "--inspect"];
+    }
+
     const beartestModulePath = await findBeartestModule();
     const runnerScriptPath = path.join(__dirname, "runner.js");
     const workspaceFolders = vscode.workspace.workspaceFolders;
