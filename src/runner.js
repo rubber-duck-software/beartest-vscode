@@ -132,12 +132,18 @@ function createCommandHandlers(protocol, testRunner) {
         type: "complete",
         success: !testRunner.isCancelling(),
       });
+
+      // Exit after sending complete message (with small delay to flush stdout)
+      setTimeout(() => process.exit(0), 100);
     } catch (error) {
       protocol.sendError(error);
       protocol.send({
         type: "complete",
         success: false,
       });
+
+      // Exit after error too
+      setTimeout(() => process.exit(1), 100);
     }
   };
 
