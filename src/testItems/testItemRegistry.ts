@@ -108,9 +108,22 @@ export const getTestFilesToRun = (
     // Run specific tests - collect unique file paths
     const files: string[] = [];
     for (const item of request.include) {
-      const filePath = getFilePathForTestItem(item);
-      if (filePath && !files.includes(filePath)) {
-        files.push(filePath);
+      const data = testItemData.get(item);
+
+      // If this is a folder (has children but no testItemData), collect all files from it
+      if (!data && item.children.size > 0) {
+        const folderFiles = collectFilesFromItem(item, []);
+        for (const file of folderFiles) {
+          if (!files.includes(file)) {
+            files.push(file);
+          }
+        }
+      } else {
+        // For files, suites, and tests, get the file path by traversing up
+        const filePath = getFilePathForTestItem(item);
+        if (filePath && !files.includes(filePath)) {
+          files.push(filePath);
+        }
       }
     }
     return files;
