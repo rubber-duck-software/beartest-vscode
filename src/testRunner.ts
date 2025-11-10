@@ -97,7 +97,12 @@ export class TestRunner {
             testItemMap: this.testItemMap,
           });
         },
-        onOutput: (output) => run.appendOutput(output),
+        onOutput: (output) => {
+          // VSCode's TestRun.appendOutput requires CRLF line endings for proper display
+          // Convert LF to CRLF to ensure ANSI colors render correctly
+          const normalizedOutput = output.replace(/\r?\n/g, "\r\n");
+          run.appendOutput(normalizedOutput);
+        },
         onComplete: () => {},
         onError: (error) => {
           vscode.window.showErrorMessage(
@@ -176,7 +181,12 @@ export class TestRunner {
             testItemMap: this.testItemMap,
           });
         },
-        onOutput: (output) => run.appendOutput(output),
+        onOutput: (output) => {
+          // VSCode's TestRun.appendOutput requires CRLF line endings for proper display
+          // Convert LF to CRLF to ensure ANSI colors render correctly
+          const normalizedOutput = output.replace(/\r?\n/g, "\r\n");
+          run.appendOutput(normalizedOutput);
+        },
         onComplete: () => {},
         onError: (error) => {
           vscode.window.showErrorMessage(
