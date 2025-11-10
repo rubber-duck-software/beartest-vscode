@@ -2,17 +2,13 @@
  * Beartest Runner Script
  *
  * This script runs in a child process and handles direct communication with the beartest module.
- * It uses Node.js IPC to communicate with the VSCode extension.
+ * It uses a JSON protocol over stdout/stdin to communicate with the VSCode extension.
  */
 
-// Helper to safely send IPC messages (only works when spawned with IPC)
+// Helper to send JSON messages over stdout
 function safeSend(message) {
-  if (process.send) {
-    process.send(message);
-  } else {
-    // Running standalone (not as IPC child process) - log to stderr
-    console.error("[Runner IPC]", JSON.stringify(message));
-  }
+  // Send messages as JSON on stdout with a delimiter
+  console.log("__BEARTEST_MESSAGE__" + JSON.stringify(message) + "__END__");
 }
 
 // Get beartest module path from environment variable
@@ -74,8 +70,6 @@ async function runTests(files, only) {
       options.only = only;
     }
 
-    console.log(files);
-
     // Consume the async generator and forward events
     for await (const event of run(options)) {
       if (shouldCancel) break;
@@ -105,11 +99,40 @@ async function runTests(files, only) {
   }
 }
 
-// Handle commands from the extension
-process.on("message", async (command) => {
+// Buffer for incoming stdin data
+let stdinBuffer = "";
+
+// Handle commands from the extension via stdin
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  stdinBuffer += chunk;
+
+  // Process complete messages (terminated by newline)
+  let newlineIndex;
+  while ((newlineIndex = stdinBuffer.indexOf("\n")) !== -1) {
+    const line = stdinBuffer.substring(0, newlineIndex);
+    stdinBuffer = stdinBuffer.substring(newlineIndex + 1);
+
+    if (line.trim()) {
+      try {
+        const command = JSON.parse(line);
+        handleCommand(command);
+      } catch (error) {
+        safeSend({
+          type: "error",
+          error: {
+            message: `Failed to parse command: ${error.message}`,
+          },
+        });
+      }
+    }
+  }
+});
+
+// Handle a command from the extension
+async function handleCommand(command) {
   switch (command.type) {
     case "run":
-      console.log(command.files);
       await runTests(command.files, command.only);
       break;
 
@@ -132,7 +155,7 @@ process.on("message", async (command) => {
         },
       });
   }
-});
+}
 
 // Signal that the runner is ready
 safeSend({ type: "ready" });

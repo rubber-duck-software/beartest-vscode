@@ -4,16 +4,16 @@ import { spawn } from "child_process";
 import { BeartestEvent, testItemData, TestItemData } from "./types";
 
 /**
- * IPC Protocol Types for communicating with the runner process
+ * JSON Protocol Types for communicating with the runner process over stdout/stdin
  */
 
-/** Commands sent from extension to runner */
+/** Commands sent from extension to runner (via stdin as JSON + newline) */
 type RunnerCommand =
   | { type: "run"; files: string[]; only?: string[] }
   | { type: "cancel" }
   | { type: "shutdown" };
 
-/** Responses sent from runner to extension */
+/** Responses sent from runner to extension (via stdout with __BEARTEST_MESSAGE__ delimiters) */
 type RunnerResponse =
   | { type: "ready" }
   | { type: "event"; data: BeartestEvent }
@@ -106,7 +106,7 @@ export class TestRunner {
   }
 
   /**
-   * Spawn beartest runner process and handle IPC communication
+   * Spawn beartest runner process and handle stdout/stdin communication
    */
   private async runBeartestProcess(
     command: string,
@@ -131,14 +131,15 @@ export class TestRunner {
 
       const child = spawn(command, [...runtimeArgs, runnerScriptPath], {
         cwd,
-        stdio: ["ignore", "pipe", "pipe", "ipc"],
+        stdio: ["pipe", "pipe", "pipe"],
         env,
       });
       let stderrBuffer = "";
+      let stdoutBuffer = "";
       let isReady = false;
 
-      // Handle IPC messages from runner
-      child.on("message", async (message: RunnerResponse) => {
+      // Parse and handle messages from stdout
+      const handleMessage = async (message: RunnerResponse) => {
         switch (message.type) {
           case "ready":
             // Runner is ready, send the run command
@@ -148,7 +149,7 @@ export class TestRunner {
               files: testFiles,
               ...(only && only.length > 0 ? { only } : {}),
             };
-            child.send(runCommand);
+            child.stdin?.write(JSON.stringify(runCommand) + "\n");
             break;
 
           case "event":
@@ -166,12 +167,49 @@ export class TestRunner {
             reject(new Error(message.error.message));
             break;
         }
-      });
+      };
 
-      // Capture stdout and forward to test results window
+      // Capture stdout - parse protocol messages and forward other output
       child.stdout?.on("data", (data) => {
-        const output = data.toString();
-        run.appendOutput(output);
+        stdoutBuffer += data.toString();
+
+        // Look for protocol messages
+        let messageStart;
+        while ((messageStart = stdoutBuffer.indexOf("__BEARTEST_MESSAGE__")) !== -1) {
+          const messageEnd = stdoutBuffer.indexOf("__END__", messageStart);
+
+          if (messageEnd === -1) {
+            // Incomplete message, wait for more data
+            break;
+          }
+
+          // Extract the message
+          const messageJson = stdoutBuffer.substring(
+            messageStart + "__BEARTEST_MESSAGE__".length,
+            messageEnd
+          );
+
+          // Remove processed message from buffer
+          stdoutBuffer = stdoutBuffer.substring(messageEnd + "__END__".length);
+
+          try {
+            const message = JSON.parse(messageJson);
+            handleMessage(message);
+          } catch (error) {
+            console.error("Failed to parse runner message:", error);
+          }
+        }
+
+        // Any remaining output (non-protocol messages) goes to test output
+        if (stdoutBuffer && !stdoutBuffer.startsWith("__BEARTEST_MESSAGE__")) {
+          const lines = stdoutBuffer.split("\n");
+          // Keep the last incomplete line in the buffer
+          stdoutBuffer = lines.pop() || "";
+          const output = lines.join("\n");
+          if (output) {
+            run.appendOutput(output + "\n");
+          }
+        }
       });
 
       // Capture stderr and forward to test results window
@@ -199,10 +237,10 @@ export class TestRunner {
 
       // Handle cancellation
       token.onCancellationRequested(() => {
-        if (isReady && child.connected) {
+        if (isReady && child.stdin?.writable) {
           // Send cancel command to runner for graceful shutdown
           const cancelCommand: RunnerCommand = { type: "cancel" };
-          child.send(cancelCommand);
+          child.stdin?.write(JSON.stringify(cancelCommand) + "\n");
 
           // Force kill after timeout
           setTimeout(() => {
