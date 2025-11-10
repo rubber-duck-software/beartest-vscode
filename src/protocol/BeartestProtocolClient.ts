@@ -28,6 +28,7 @@ export interface ProtocolHandlers {
   onOutput: (output: string) => void;
   onComplete: () => void;
   onError: (error: Error) => void;
+  onDebugPort?: (port: number) => void;
 }
 
 interface BufferState {
@@ -198,6 +199,16 @@ export const runWithProtocol = async (
     child.stderr?.on("data", (data) => {
       const output = data.toString();
       bufferState.stderr += output;
+
+      // Check for debugger port in stderr output
+      if (handlers.onDebugPort) {
+        const debugMatch = output.match(/Debugger listening on ws:\/\/127\.0\.0\.1:(\d+)/);
+        if (debugMatch) {
+          const port = parseInt(debugMatch[1], 10);
+          handlers.onDebugPort(port);
+        }
+      }
+
       handlers.onOutput(output);
     });
 

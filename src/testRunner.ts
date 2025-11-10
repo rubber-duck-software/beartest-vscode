@@ -100,7 +100,9 @@ export class TestRunner {
         onOutput: (output) => run.appendOutput(output),
         onComplete: () => {},
         onError: (error) => {
-          vscode.window.showErrorMessage(`Beartest execution failed: ${error.message}`);
+          vscode.window.showErrorMessage(
+            `Beartest execution failed: ${error.message}`
+          );
         },
       };
 
@@ -116,7 +118,6 @@ export class TestRunner {
     }
   }
 
-
   /**
    * Debug tests (similar to run but with debugger attached)
    */
@@ -124,57 +125,99 @@ export class TestRunner {
     request: vscode.TestRunRequest,
     token: vscode.CancellationToken
   ): Promise<void> {
+    const run = this.controller.createTestRun(request);
     const testFiles = getTestFilesToRun(request, this.controller);
 
     if (testFiles.length === 0) {
       vscode.window.showWarningMessage("No test files selected for debugging");
+      run.end();
       return;
     }
 
-    // Get configuration
-    const config = vscode.workspace.getConfiguration("beartest");
-    const command = config.get<string>("command", "node");
-    const runtimeArgs = config.get<string[]>("runtimeArgs", []);
+    try {
+      // Get configuration
+      const config = vscode.workspace.getConfiguration("beartest");
+      const command = config.get<string>("command", "node");
+      const runtimeArgs = config.get<string[]>("runtimeArgs", []);
 
-    // Find beartest module
-    const beartestModulePath = await this.findBeartestModule();
+      // Add inspect-brk flag for debugging
+      const debugRuntimeArgs = this.injectDebugFlag(command, runtimeArgs);
 
-    // Get runner script path
-    const runnerScriptPath = path.join(__dirname, "runner.js");
+      // Find beartest module
+      const beartestModulePath = await this.findBeartestModule();
 
-    // Get workspace folder for cwd
-    const workspaceFolders = vscode.workspace.workspaceFolders;
-    const cwd = workspaceFolders?.[0]?.uri.fsPath;
+      // Get runner script path
+      const runnerScriptPath = path.join(__dirname, "runner.js");
 
-    // Create debug configuration
-    const debugConfig: vscode.DebugConfiguration = {
-      type: "node",
-      request: "launch",
-      name: "Debug Beartest",
-      program: runnerScriptPath,
-      args: [],
-      cwd,
-      console: "integratedTerminal",
-      internalConsoleOptions: "neverOpen",
-      env: {
-        BEARTEST_MODULE_PATH: beartestModulePath,
-      },
-    };
+      // Get workspace folder for cwd
+      const workspaceFolders = vscode.workspace.workspaceFolders;
+      const cwd = workspaceFolders?.[0]?.uri.fsPath || process.cwd();
 
-    // Use custom command if not default
-    if (command !== "node") {
-      debugConfig.runtimeExecutable = command;
+      // Track suite stack for nesting
+      const suiteStack: vscode.TestItem[] = [];
+
+      // Build 'only' filter for granular test execution
+      const only = buildOnlyFilter(request);
+
+      // Protocol configuration with debug args
+      const protocolConfig: ProtocolConfig = {
+        command,
+        runtimeArgs: debugRuntimeArgs,
+        runnerScriptPath,
+        beartestModulePath,
+        cwd,
+      };
+
+      // Protocol handlers
+      const handlers: ProtocolHandlers = {
+        onEvent: async (event) => {
+          handleBeartestEvent({
+            event,
+            run,
+            suiteStack,
+            controller: this.controller,
+            testItemMap: this.testItemMap,
+          });
+        },
+        onOutput: (output) => run.appendOutput(output),
+        onComplete: () => {},
+        onError: (error) => {
+          vscode.window.showErrorMessage(
+            `Beartest execution failed: ${error.message}`
+          );
+        },
+        onDebugPort: async (port) => {
+          // Attach debugger to the detected port
+          const debugConfig: vscode.DebugConfiguration = {
+            type: "node",
+            request: "attach",
+            name: "Attach to Beartest",
+            port,
+            skipFiles: ["<node_internals>/**"],
+          };
+          await vscode.debug.startDebugging(undefined, debugConfig);
+        },
+      };
+
+      // Run tests using protocol with debugging enabled
+      await runWithProtocol(protocolConfig, handlers, testFiles, only, token);
+
+      run.end();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      vscode.window.showErrorMessage(`Beartest debug failed: ${message}`);
+      run.end();
     }
-
-    // Add runtime args if specified
-    if (runtimeArgs.length > 0) {
-      debugConfig.runtimeArgs = runtimeArgs;
-    }
-
-    // Start debugging session
-    await vscode.debug.startDebugging(undefined, debugConfig);
   }
 
+  /**
+   * Inject --inspect-brk flag into runtime args for debugging
+   * Handles both direct node execution and wrapper commands (pnpm, npm, etc.)
+   */
+  private injectDebugFlag(_command: string, runtimeArgs: string[]): string[] {
+    // Append debug flag to runtime args
+    return [...runtimeArgs, "--inspect-brk=0"];
+  }
 
   /**
    * Find the beartest module in node_modules using Node's module resolution
