@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import * as path from "path";
+import { spawn } from "child_process";
 import { BeartestEvent, testItemData, TestItemData } from "./types";
 
 /**
@@ -46,24 +47,29 @@ export class TestRunner {
     const testFiles = this.getTestFilesToRun(request);
 
     try {
-      // Import beartest dynamically
+      // Get configuration
+      const config = vscode.workspace.getConfiguration("beartest");
+      const command = config.get<string>("command", "node");
+      const runtimeArgs = config.get<string[]>("runtimeArgs", []);
+
+      // Find beartest CLI
       const beartestPath = await this.findBeartestModule();
-      const beartest = require(beartestPath);
+      const beartestCliPath = path.join(path.dirname(beartestPath), "cli.js");
 
       // Track suite stack for nesting
       const suiteStack: vscode.TestItem[] = [];
-      let currentFileItem: vscode.TestItem | undefined;
 
-      // Run beartest with the selected files
-      for await (const event of beartest.run({ files: testFiles })) {
-        if (token.isCancellationRequested) {
-          break;
+      // Spawn beartest process with custom command
+      await this.runBeartestProcess(
+        command,
+        runtimeArgs,
+        beartestCliPath,
+        testFiles,
+        token,
+        async (event) => {
+          await this.handleBeartestEvent(event, run, suiteStack, () => {});
         }
-
-        await this.handleBeartestEvent(event, run, suiteStack, (fileItem) => {
-          currentFileItem = fileItem;
-        });
-      }
+      );
 
       run.end();
     } catch (error) {
@@ -72,6 +78,77 @@ export class TestRunner {
       vscode.window.showErrorMessage(`Beartest execution failed: ${message}`);
       run.end();
     }
+  }
+
+  /**
+   * Spawn beartest process and handle events
+   */
+  private async runBeartestProcess(
+    command: string,
+    runtimeArgs: string[],
+    beartestCliPath: string,
+    testFiles: string[],
+    token: vscode.CancellationToken,
+    onEvent: (event: BeartestEvent) => Promise<void>
+  ): Promise<void> {
+    return new Promise((resolve, reject) => {
+      // Get workspace folder for cwd
+      const workspaceFolders = vscode.workspace.workspaceFolders;
+      const cwd = workspaceFolders?.[0]?.uri.fsPath || process.cwd();
+
+      // Spawn beartest process with configured command and runtime args
+      const child = spawn(command, [...runtimeArgs, beartestCliPath, ...testFiles], {
+        cwd,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+
+      let stdoutBuffer = "";
+      let stderrBuffer = "";
+
+      // Handle stdout - parse JSON events
+      child.stdout?.on("data", async (data) => {
+        stdoutBuffer += data.toString();
+        const lines = stdoutBuffer.split("\n");
+        stdoutBuffer = lines.pop() || ""; // Keep incomplete line in buffer
+
+        for (const line of lines) {
+          if (line.trim()) {
+            try {
+              const event = JSON.parse(line) as BeartestEvent;
+              await onEvent(event);
+            } catch (err) {
+              console.error("Failed to parse beartest event:", line, err);
+            }
+          }
+        }
+      });
+
+      // Collect stderr for error reporting
+      child.stderr?.on("data", (data) => {
+        stderrBuffer += data.toString();
+      });
+
+      // Handle process exit
+      child.on("close", (code) => {
+        if (code === 0) {
+          resolve();
+        } else {
+          const errorMessage = stderrBuffer || `Beartest exited with code ${code}`;
+          reject(new Error(errorMessage));
+        }
+      });
+
+      // Handle process errors
+      child.on("error", (err) => {
+        reject(err);
+      });
+
+      // Handle cancellation
+      token.onCancellationRequested(() => {
+        child.kill();
+        resolve();
+      });
+    });
   }
 
   /**
@@ -88,9 +165,18 @@ export class TestRunner {
       return;
     }
 
+    // Get configuration
+    const config = vscode.workspace.getConfiguration("beartest");
+    const command = config.get<string>("command", "node");
+    const runtimeArgs = config.get<string[]>("runtimeArgs", []);
+
     // Find beartest CLI
     const beartestPath = await this.findBeartestModule();
     const beartestCliPath = path.join(path.dirname(beartestPath), "cli.js");
+
+    // Get workspace folder for cwd
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    const cwd = workspaceFolders?.[0]?.uri.fsPath;
 
     // Create debug configuration
     const debugConfig: vscode.DebugConfiguration = {
@@ -99,9 +185,20 @@ export class TestRunner {
       name: "Debug Beartest",
       program: beartestCliPath,
       args: testFiles,
+      cwd,
       console: "integratedTerminal",
       internalConsoleOptions: "neverOpen",
     };
+
+    // Use custom command if not default
+    if (command !== "node") {
+      debugConfig.runtimeExecutable = command;
+    }
+
+    // Add runtime args if specified
+    if (runtimeArgs.length > 0) {
+      debugConfig.runtimeArgs = runtimeArgs;
+    }
 
     // Start debugging session
     await vscode.debug.startDebugging(undefined, debugConfig);
@@ -116,8 +213,7 @@ export class TestRunner {
     suiteStack: vscode.TestItem[],
     setCurrentFile: (fileItem: vscode.TestItem) => void
   ): Promise<void> {
-    const { type, data } = event;
-    const { name, nesting } = data;
+    const { type } = event;
 
     switch (type) {
       case "test:start":
@@ -392,43 +488,72 @@ export class TestRunner {
   }
 
   /**
-   * Find the beartest module in node_modules
+   * Find the beartest module in node_modules using Node's module resolution
+   * Inspired by Vitest's multi-strategy package resolution approach
    */
   private async findBeartestModule(): Promise<string> {
-    // Try to find beartest in workspace
     const workspaceFolders = vscode.workspace.workspaceFolders;
     if (!workspaceFolders || workspaceFolders.length === 0) {
       throw new Error("No workspace folder found");
     }
 
-    // Look for beartest in node_modules
-    const beartestPath = path.join(
-      workspaceFolders[0].uri.fsPath,
-      "node_modules",
-      "beartest",
-      "index.js"
-    );
+    const errors: string[] = [];
 
-    // Check if it exists (simple check, could be enhanced)
+    // Strategy 1: Try each workspace folder using Node's module resolution
+    for (const folder of workspaceFolders) {
+      try {
+        // Use Node's module resolution from the workspace folder's context
+        // This respects node_modules, package.json, and proper resolution order
+        const beartestPath = require.resolve("beartest-js", {
+          paths: [folder.uri.fsPath],
+        });
+        return beartestPath;
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        errors.push(`  ${folder.name}: ${errorMsg}`);
+      }
+    }
+
+    // Strategy 2: Development mode - check for beartest-js sibling directory
+    // This handles the case where beartest-js is being developed alongside the extension
+    for (const folder of workspaceFolders) {
+      try {
+        // Check for beartest-js in parent directory (development scenario)
+        const parentDir = path.dirname(folder.uri.fsPath);
+        const devBeartestPath = path.join(parentDir, "beartest-js", "index.js");
+
+        require.resolve(devBeartestPath);
+        return devBeartestPath;
+      } catch {
+        // Continue to next folder
+      }
+    }
+
+    // Strategy 3: Check relative to the extension's installation directory
     try {
-      require.resolve(beartestPath);
-      return beartestPath;
-    } catch {
-      // Try relative path for development
-      const relativePath = path.join(
-        workspaceFolders[0].uri.fsPath,
+      const extensionDir = path.dirname(__dirname);
+      const siblingBeartestPath = path.join(
+        path.dirname(extensionDir),
         "beartest-js",
         "index.js"
       );
 
-      try {
-        require.resolve(relativePath);
-        return relativePath;
-      } catch {
-        throw new Error(
-          "Beartest module not found. Please install beartest in your workspace."
-        );
-      }
+      require.resolve(siblingBeartestPath);
+      return siblingBeartestPath;
+    } catch {
+      // Continue to error
     }
+
+    // If not found, provide helpful error message
+    const errorMessage = [
+      "Beartest module not found in any workspace folder.",
+      "Please install beartest by running:",
+      "  npm install --save-dev beartest-js",
+      "",
+      "Searched in:",
+      ...errors,
+    ].join("\n");
+
+    throw new Error(errorMessage);
   }
 }

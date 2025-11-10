@@ -28,6 +28,19 @@
           "type": "string",
           "default": "**/*.test.*",
           "description": "Glob pattern for discovering test files"
+        },
+        "beartest.command": {
+          "type": "string",
+          "default": "node",
+          "description": "Command to execute tests (e.g., 'node', 'tsx', 'bun')"
+        },
+        "beartest.runtimeArgs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Additional arguments passed to the runtime before the test script (e.g., ['--require', './test-setup.js'])"
         }
       }
     }
