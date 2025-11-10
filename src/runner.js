@@ -5,180 +5,232 @@
  * It uses a JSON protocol over stdout/stdin to communicate with the VSCode extension.
  */
 
-// Helper to send JSON messages over stdout
-function safeSend(message) {
-  // Send messages as JSON on stdout with a delimiter
-  console.log("__BEARTEST_MESSAGE__" + JSON.stringify(message) + "__END__");
-}
+const { EventEmitter } = require("events");
 
-// Get beartest module path from environment variable
-const beartestModulePath = process.env.BEARTEST_MODULE_PATH;
-
-if (!beartestModulePath) {
-  safeSend({
-    type: "error",
-    error: {
-      message: "BEARTEST_MODULE_PATH environment variable not set",
-      stack: new Error().stack,
-    },
-  });
-  process.exit(1);
-}
-
-let beartest;
-try {
-  beartest = require(beartestModulePath);
-} catch (error) {
-  safeSend({
-    type: "error",
-    error: {
-      message: `Failed to load beartest module from ${beartestModulePath}: ${error.message}`,
-      stack: error.stack,
-    },
-  });
-  process.exit(1);
-}
-
-const { run } = beartest;
-
-// Flag to track if we should cancel execution
-let shouldCancel = false;
+// ============================================================================
+// MessageProtocol - Handles JSON communication over stdin/stdout
+// ============================================================================
 
 /**
- * Async iterable wrapper for file list
+ * Creates a message protocol for JSON communication
  */
-async function* createFileIterable(files) {
-  for (const file of files) {
-    if (shouldCancel) break;
-    yield file;
-  }
-}
+function createMessageProtocol(
+  inputStream = process.stdin,
+  outputStream = process.stdout
+) {
+  const emitter = new EventEmitter();
+  let buffer = "";
 
-/**
- * Run tests and stream events back to the extension
- */
-async function runTests(files, only) {
-  shouldCancel = false;
+  const send = (message) => {
+    const json = JSON.stringify(message);
+    outputStream.write(`__BEARTEST_MESSAGE__${json}__END__\n`);
+  };
 
-  try {
-    const options = {
-      files: createFileIterable(files),
-    };
-
-    // Add 'only' filter if provided
-    if (only && only.length > 0) {
-      options.only = only;
-    }
-
-    // Consume the async generator and forward events
-    for await (const event of run(options)) {
-      if (shouldCancel) break;
-
-      safeSend({
-        type: "event",
-        data: event,
-      });
-    }
-
-    safeSend({
-      type: "complete",
-      success: !shouldCancel,
-    });
-  } catch (error) {
-    safeSend({
+  const sendError = (error) => {
+    send({
       type: "error",
       error: {
         message: error.message,
         stack: error.stack,
       },
     });
-    safeSend({
-      type: "complete",
-      success: false,
-    });
-  }
-}
+  };
 
-// Buffer for incoming stdin data
-let stdinBuffer = "";
+  const handleData = (chunk) => {
+    buffer += chunk;
 
-// Handle commands from the extension via stdin
-process.stdin.setEncoding("utf8");
-process.stdin.on("data", (chunk) => {
-  stdinBuffer += chunk;
+    let newlineIndex;
+    while ((newlineIndex = buffer.indexOf("\n")) !== -1) {
+      const line = buffer.substring(0, newlineIndex);
+      buffer = buffer.substring(newlineIndex + 1);
 
-  // Process complete messages (terminated by newline)
-  let newlineIndex;
-  while ((newlineIndex = stdinBuffer.indexOf("\n")) !== -1) {
-    const line = stdinBuffer.substring(0, newlineIndex);
-    stdinBuffer = stdinBuffer.substring(newlineIndex + 1);
-
-    if (line.trim()) {
-      try {
-        const command = JSON.parse(line);
-        handleCommand(command);
-      } catch (error) {
-        safeSend({
-          type: "error",
-          error: {
-            message: `Failed to parse command: ${error.message}`,
-          },
-        });
+      if (line.trim()) {
+        try {
+          const command = JSON.parse(line);
+          emitter.emit("command", command);
+        } catch (error) {
+          sendError(new Error(`Failed to parse command: ${error.message}`));
+        }
       }
     }
+  };
+
+  const start = () => {
+    inputStream.setEncoding("utf8");
+    inputStream.on("data", handleData);
+  };
+
+  return {
+    send,
+    sendError,
+    start,
+    on: (event, handler) => emitter.on(event, handler),
+  };
+}
+
+// ============================================================================
+// TestRunner - Manages test execution and cancellation
+// ============================================================================
+
+/**
+ * Creates a test runner with cancellation support
+ */
+function createTestRunner(beartest) {
+  let shouldCancel = false;
+
+  async function* createFileIterable(files) {
+    for (const file of files) {
+      if (shouldCancel) break;
+      yield file;
+    }
   }
-});
 
-// Handle a command from the extension
-async function handleCommand(command) {
-  switch (command.type) {
-    case "run":
-      await runTests(command.files, command.only);
-      break;
+  async function* run(files, only) {
+    shouldCancel = false;
 
-    case "cancel":
-      shouldCancel = true;
-      // Give it a moment to cancel gracefully
-      setTimeout(() => {
-        process.exit(0);
-      }, 100);
-      break;
+    const options = {
+      files: createFileIterable(files),
+    };
 
-    case "shutdown":
-      process.exit(0);
+    if (only && only.length > 0) {
+      options.only = only;
+    }
 
-    default:
-      safeSend({
-        type: "error",
-        error: {
-          message: `Unknown command type: ${command.type}`,
-        },
+    for await (const event of beartest.run(options)) {
+      if (shouldCancel) break;
+      yield event;
+    }
+  }
+
+  const cancel = () => {
+    shouldCancel = true;
+  };
+
+  const isCancelling = () => shouldCancel;
+
+  return { run, cancel, isCancelling };
+}
+
+// ============================================================================
+// CommandHandler - Routes commands and coordinates components
+// ============================================================================
+
+/**
+ * Creates command handlers
+ */
+function createCommandHandlers(protocol, testRunner) {
+  const handleRunCommand = async (command) => {
+    try {
+      for await (const event of testRunner.run(command.files, command.only)) {
+        protocol.send({
+          type: "event",
+          data: event,
+        });
+      }
+
+      protocol.send({
+        type: "complete",
+        success: !testRunner.isCancelling(),
       });
+    } catch (error) {
+      protocol.sendError(error);
+      protocol.send({
+        type: "complete",
+        success: false,
+      });
+    }
+  };
+
+  const handleCancelCommand = () => {
+    testRunner.cancel();
+    setTimeout(() => process.exit(0), 100);
+  };
+
+  const handleShutdownCommand = () => {
+    process.exit(0);
+  };
+
+  const handleCommand = async (command) => {
+    switch (command.type) {
+      case "run":
+        await handleRunCommand(command);
+        break;
+      case "cancel":
+        handleCancelCommand();
+        break;
+      case "shutdown":
+        handleShutdownCommand();
+        break;
+      default:
+        protocol.sendError(new Error(`Unknown command type: ${command.type}`));
+    }
+  };
+
+  return handleCommand;
+}
+
+// ============================================================================
+// Initialization and Setup
+// ============================================================================
+
+/**
+ * Load the beartest module from the environment variable
+ */
+function loadBeartestModule(protocol) {
+  const beartestModulePath = process.env.BEARTEST_MODULE_PATH;
+
+  if (!beartestModulePath) {
+    protocol.sendError(
+      new Error("BEARTEST_MODULE_PATH environment variable not set")
+    );
+    process.exit(1);
+  }
+
+  try {
+    return require(beartestModulePath);
+  } catch (error) {
+    protocol.sendError(
+      new Error(
+        `Failed to load beartest module from ${beartestModulePath}: ${error.message}`
+      )
+    );
+    process.exit(1);
   }
 }
 
-// Signal that the runner is ready
-safeSend({ type: "ready" });
-
-// Handle process errors
-process.on("uncaughtException", (error) => {
-  safeSend({
-    type: "error",
-    error: {
-      message: `Uncaught exception: ${error.message}`,
-      stack: error.stack,
-    },
+/**
+ * Setup global error handlers
+ */
+function setupErrorHandlers(protocol) {
+  process.on("uncaughtException", (error) => {
+    protocol.sendError(new Error(`Uncaught exception: ${error.message}`));
+    process.exit(1);
   });
-  process.exit(1);
-});
 
-process.on("unhandledRejection", (reason) => {
-  safeSend({
-    type: "error",
-    error: {
-      message: `Unhandled rejection: ${reason}`,
-      stack: reason instanceof Error ? reason.stack : undefined,
-    },
+  process.on("unhandledRejection", (reason) => {
+    const message = reason instanceof Error ? reason.message : String(reason);
+    const error = new Error(`Unhandled rejection: ${message}`);
+    if (reason instanceof Error) {
+      error.stack = reason.stack;
+    }
+    protocol.sendError(error);
+    process.exit(1);
   });
-  process.exit(1);
-});
+}
+
+/**
+ * Initialize and start the runner
+ */
+function main() {
+  const protocol = createMessageProtocol();
+  const beartest = loadBeartestModule(protocol);
+  const testRunner = createTestRunner(beartest);
+  const handleCommand = createCommandHandlers(protocol, testRunner);
+
+  setupErrorHandlers(protocol);
+  protocol.on("command", handleCommand);
+  protocol.start();
+  protocol.send({ type: "ready" });
+}
+
+main();
