@@ -1,0 +1,48 @@
+{
+  "name": "beartest-vscode",
+  "displayName": "Beartest Test Explorer",
+  "description": "VSCode Test Explorer integration for beartest-js",
+  "version": "0.1.0",
+  "publisher": "beartest",
+  "engines": {
+    "vscode": "^1.59.0"
+  },
+  "categories": [
+    "Testing"
+  ],
+  "keywords": [
+    "test",
+    "testing",
+    "beartest",
+    "test explorer"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "workspaceContains:**/*.test.*"
+  ],
+  "contributes": {
+    "configuration": {
+      "title": "Beartest",
+      "properties": {
+        "beartest.testFilePattern": {
+          "type": "string",
+          "default": "**/*.test.*",
+          "description": "Glob pattern for discovering test files"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/node": "^18.x",
+    "@types/vscode": "^1.59.0",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {}
+}
