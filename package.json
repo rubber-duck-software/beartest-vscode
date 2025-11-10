@@ -2,7 +2,7 @@
   "name": "beartest-vscode",
   "displayName": "Beartest Test Explorer",
   "description": "VSCode Test Explorer integration for beartest-js",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "publisher": "rubber-duck-software",
   "repository": "https://github.com/rubber-duck-software/beartest-vscode",
   "icon": "./beartest-logo.png",
