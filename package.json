@@ -2,7 +2,7 @@
   "name": "beartest-vscode",
   "displayName": "Beartest Test Explorer",
   "description": "VSCode Test Explorer integration for beartest-js",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "publisher": "rubber-duck-software",
   "repository": "https://github.com/rubber-duck-software/beartest-vscode",
   "icon": "./beartest-logo.png",
@@ -74,7 +74,11 @@
                 "description": "Optional working directory override (relative to workspace root)"
               }
             },
-            "required": ["pattern", "command", "runtimeArgs"]
+            "required": [
+              "pattern",
+              "command",
+              "runtimeArgs"
+            ]
           },
           "default": [],
           "description": "Array of configuration patterns for running tests in different environments (useful for monorepos). Each test file is matched against patterns in order, and the first match is used.",

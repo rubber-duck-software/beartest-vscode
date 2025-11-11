@@ -15,17 +15,55 @@ import {
 } from "./configResolver";
 
 /**
+ * Recursively mark a test item and all its children as started
+ */
+const markItemAndChildrenAsStarted = (
+  run: vscode.TestRun,
+  item: vscode.TestItem
+): void => {
+  run.started(item);
+  item.children.forEach((child) => {
+    markItemAndChildrenAsStarted(run, child);
+  });
+};
+
+/**
+ * Mark all test items that will be run as started immediately
+ */
+const markTestItemsAsStarted = (
+  run: vscode.TestRun,
+  request: vscode.TestRunRequest,
+  controller: vscode.TestController
+): void => {
+  if (request.include && request.include.length > 0) {
+    // Mark specific items and their children
+    for (const item of request.include) {
+      markItemAndChildrenAsStarted(run, item);
+    }
+  } else {
+    // Mark all items in the controller
+    controller.items.forEach((item) => {
+      markItemAndChildrenAsStarted(run, item);
+    });
+  }
+};
+
+/**
  * Create test profiles for the given controller
  * Returns an object with run and debug profiles
  */
 export const createTestProfiles = (controller: vscode.TestController) => {
   const testItemMap = new Map<string, vscode.TestItem>();
+  let isRunning = false;
 
   const runProfile = controller.createRunProfile(
     "Run Tests",
     vscode.TestRunProfileKind.Run,
     (request, token) =>
-      executeTests(request, controller, testItemMap, token, false),
+      executeTests(request, controller, testItemMap, token, false, {
+        isRunning: () => isRunning,
+        setRunning: (value: boolean) => { isRunning = value; }
+      }),
     true // isDefault
   );
 
@@ -33,7 +71,10 @@ export const createTestProfiles = (controller: vscode.TestController) => {
     "Debug Tests",
     vscode.TestRunProfileKind.Debug,
     (request, token) =>
-      executeTests(request, controller, testItemMap, token, true),
+      executeTests(request, controller, testItemMap, token, true, {
+        isRunning: () => isRunning,
+        setRunning: (value: boolean) => { isRunning = value; }
+      }),
     false
   );
 
@@ -48,14 +89,32 @@ const executeTests = async (
   controller: vscode.TestController,
   testItemMap: Map<string, vscode.TestItem>,
   token: vscode.CancellationToken,
-  isDebug: boolean
+  isDebug: boolean,
+  runningState: {
+    isRunning: () => boolean;
+    setRunning: (value: boolean) => void;
+  }
 ): Promise<void> => {
+  // Prevent multiple concurrent test runs
+  if (runningState.isRunning()) {
+    vscode.window.showWarningMessage(
+      "Tests are already running. Please wait for the current run to complete."
+    );
+    return;
+  }
+
+  runningState.setRunning(true);
+
   const run = controller.createTestRun(request);
   const testFiles = getTestFilesToRun(request, controller);
+
+  // Mark all test items as started immediately
+  markTestItemsAsStarted(run, request, controller);
 
   if (isDebug && testFiles.length === 0) {
     vscode.window.showWarningMessage("No test files selected for debugging");
     run.end();
+    runningState.setRunning(false);
     return;
   }
 
@@ -106,11 +165,13 @@ const executeTests = async (
     }
 
     run.end();
+    runningState.setRunning(false);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const prefix = isDebug ? "Beartest debug" : "Beartest execution";
     vscode.window.showErrorMessage(`${prefix} failed: ${message}`);
     run.end();
+    runningState.setRunning(false);
   }
 };
 
