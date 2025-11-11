@@ -20,7 +20,7 @@
   ],
   "main": "./out/extension.js",
   "activationEvents": [
-    "workspaceContains:**/*.test.*"
+    "onStartupFinished"
   ],
   "contributes": {
     "configuration": {

@@ -1,4 +1,6 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
+import * as fs from 'fs';
 import { createTestDiscovery } from './testDiscovery';
 import { createTestProfiles } from './testRunner';
 import { loadConfigurations } from './configResolver';
@@ -18,7 +20,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Initialize test discovery for each workspace folder
   const workspaceFolders = vscode.workspace.workspaceFolders;
   if (!workspaceFolders || workspaceFolders.length === 0) {
-    vscode.window.showWarningMessage('No workspace folder found for Beartest extension');
+    console.log('Beartest: No workspace folder found');
+    return;
+  }
+
+  // Check if beartest-js is installed in any workspace folder
+  const isBeartestInstalled = await hasBeartestInstalled(workspaceFolders);
+  if (!isBeartestInstalled) {
+    console.log('Beartest: beartest-js not found in any workspace package.json, skipping activation');
     return;
   }
 
@@ -51,6 +60,35 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
 
   console.log('Beartest Test Explorer extension activated');
+}
+
+/**
+ * Check if beartest-js is installed in any workspace folder
+ */
+async function hasBeartestInstalled(workspaceFolders: readonly vscode.WorkspaceFolder[]): Promise<boolean> {
+  for (const folder of workspaceFolders) {
+    const packageJsonPath = path.join(folder.uri.fsPath, 'package.json');
+
+    try {
+      if (fs.existsSync(packageJsonPath)) {
+        const packageJsonContent = await fs.promises.readFile(packageJsonPath, 'utf8');
+        const packageJson = JSON.parse(packageJsonContent);
+
+        // Check both dependencies and devDependencies
+        const hasBeartest =
+          (packageJson.dependencies && 'beartest-js' in packageJson.dependencies) ||
+          (packageJson.devDependencies && 'beartest-js' in packageJson.devDependencies);
+
+        if (hasBeartest) {
+          return true;
+        }
+      }
+    } catch (error) {
+      console.error(`Failed to read package.json in ${folder.uri.fsPath}:`, error);
+    }
+  }
+
+  return false;
 }
 
 /**
