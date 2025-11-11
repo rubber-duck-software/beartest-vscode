@@ -62,6 +62,72 @@ Configure the extension in your VSCode settings:
 ### Available Settings
 
 - `beartest.testFilePattern`: Array of glob patterns for discovering test files (default: `["**/*.test.*"]`)
+- `beartest.command`: Command to execute tests (default: `"node"`)
+- `beartest.runtimeArgs`: Additional arguments passed to the runtime (default: `[]`)
+- `beartest.configurations`: Array of pattern-based configurations for different test environments (default: `[]`)
+
+### Monorepo Configuration
+
+For monorepos or projects where different test files need different runtime configurations, use `beartest.configurations`. This allows you to specify different commands and runtime arguments based on file path patterns.
+
+**Example: Running frontend tests with Bun and backend tests with Node:**
+
+```json
+{
+  "beartest.configurations": [
+    {
+      "pattern": "packages/frontend/**",
+      "command": "bun",
+      "runtimeArgs": ["--preload", "./setup.ts"]
+    },
+    {
+      "pattern": "packages/backend/**",
+      "command": "node",
+      "runtimeArgs": ["--require", "./test-setup.js"]
+    },
+    {
+      "pattern": "packages/legacy/**",
+      "command": "node",
+      "runtimeArgs": ["--experimental-modules"],
+      "cwd": "packages/legacy"
+    }
+  ]
+}
+```
+
+**How it works:**
+- Each test file is matched against patterns in order
+- The first matching pattern's configuration is used
+- Tests with different configurations run in separate processes automatically
+- If no pattern matches, an error is shown
+
+**Configuration options:**
+- `pattern` (required): Glob pattern to match test file paths (e.g., `"packages/frontend/**"`)
+- `command` (required): Runtime command (e.g., `"node"`, `"bun"`, `"tsx"`)
+- `runtimeArgs` (required): Array of arguments passed to the runtime
+- `cwd` (optional): Working directory relative to workspace root
+
+**Multi-root workspaces:**
+
+For multi-root workspaces, patterns are matched relative to each workspace folder:
+
+```json
+{
+  "folders": [
+    { "path": "frontend" },
+    { "path": "backend" }
+  ],
+  "settings": {
+    "beartest.configurations": [
+      {
+        "pattern": "**/*.test.ts",
+        "command": "tsx",
+        "runtimeArgs": []
+      }
+    ]
+  }
+}
+```
 
 ## How It Works
 

@@ -175,7 +175,10 @@ function createCommandHandlers(protocol, testRunner) {
           console.log(
             `\x1b[32m${prefix}✓\x1b[0m\x1b[90m ${event.data.name}\x1b[0m`
           );
-        } else if (event.type === "test:fail") {
+        } else if (
+          event.type === "test:fail" &&
+          event.data.details.type === "test"
+        ) {
           // Log test/suite name
           console.log(`\x1b[31m${prefix}✗ ${event.data.name}\x1b[0m`);
 
@@ -192,7 +195,7 @@ function createCommandHandlers(protocol, testRunner) {
 
             // Log stack trace
             if (actualError.stack) {
-              const stackLines = actualError.stack.split('\n');
+              const stackLines = actualError.stack.split("\n");
               // Skip the first line if it's just the error message
               const startIndex = stackLines[0].includes(errorMessage) ? 1 : 0;
               for (let i = startIndex; i < stackLines.length; i++) {

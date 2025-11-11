@@ -2,7 +2,7 @@
   "name": "beartest-vscode",
   "displayName": "Beartest Test Explorer",
   "description": "VSCode Test Explorer integration for beartest-js",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "publisher": "rubber-duck-software",
   "repository": "https://github.com/rubber-duck-software/beartest-vscode",
   "icon": "./beartest-logo.png",
@@ -31,7 +31,9 @@
           "items": {
             "type": "string"
           },
-          "default": ["**/*.test.*"],
+          "default": [
+            "**/*.test.*"
+          ],
           "description": "Glob patterns for discovering test files"
         },
         "beartest.command": {
@@ -46,6 +48,37 @@
           },
           "default": [],
           "description": "Additional arguments passed to the runtime before the test script (e.g., ['--require', './test-setup.js'])"
+        },
+        "beartest.configurations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "pattern": {
+                "type": "string",
+                "description": "Glob pattern to match test file paths (e.g., 'packages/frontend/**', 'backend/**/*.test.ts')"
+              },
+              "command": {
+                "type": "string",
+                "description": "Command to execute tests (e.g., 'node', 'tsx', 'bun')"
+              },
+              "runtimeArgs": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Additional arguments passed to the runtime before the test script"
+              },
+              "cwd": {
+                "type": "string",
+                "description": "Optional working directory override (relative to workspace root)"
+              }
+            },
+            "required": ["pattern", "command", "runtimeArgs"]
+          },
+          "default": [],
+          "description": "Array of configuration patterns for running tests in different environments (useful for monorepos). Each test file is matched against patterns in order, and the first match is used.",
+          "markdownDescription": "Array of configuration patterns for running tests in different environments.\n\nUseful for monorepos where different packages need different runtime configurations.\n\nExample:\n```json\n[\n  {\n    \"pattern\": \"packages/frontend/**\",\n    \"command\": \"bun\",\n    \"runtimeArgs\": [\"--preload\", \"./setup.ts\"]\n  },\n  {\n    \"pattern\": \"packages/backend/**\",\n    \"command\": \"node\",\n    \"runtimeArgs\": [\"--require\", \"./test-setup.js\"]\n  }\n]\n```"
         }
       }
     }
@@ -63,5 +96,7 @@
     "@types/vscode": "^1.59.0",
     "typescript": "^5.3.0"
   },
-  "dependencies": {}
+  "dependencies": {
+    "minimatch": "^10.0.1"
+  }
 }

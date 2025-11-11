@@ -8,6 +8,11 @@ import {
 } from "./beartestProtocolClient";
 import { getTestFilesToRun } from "./testItemRegistry";
 import { handleBeartestEvent } from "./eventHandlers";
+import {
+  loadConfigurations,
+  groupFilesByConfig,
+  ResolvedTestConfig,
+} from "./configResolver";
 
 /**
  * Create test profiles for the given controller
@@ -55,63 +60,51 @@ const executeTests = async (
   }
 
   try {
-    // Gather configuration
-    const config = vscode.workspace.getConfiguration("beartest");
-    const command = config.get<string>("command", "node");
-    let runtimeArgs = config.get<string[]>("runtimeArgs", []);
+    // Load configurations from settings
+    const configurations = loadConfigurations();
 
-    // Add --inspect for debugging
-    if (isDebug) {
-      runtimeArgs = [...runtimeArgs, "--inspect"];
+    // Get workspace folders
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    if (!workspaceFolders || workspaceFolders.length === 0) {
+      throw new Error("No workspace folder found");
     }
 
-    const beartestModulePath = await findBeartestModule();
-    const runnerScriptPath = path.join(__dirname, "runner.js");
-    const workspaceFolders = vscode.workspace.workspaceFolders;
-    const cwd = workspaceFolders?.[0]?.uri.fsPath || process.cwd();
+    // Group test files by their resolved configuration
+    const configGroups = groupFilesByConfig(
+      testFiles,
+      workspaceFolders,
+      configurations
+    );
 
-    const protocolConfig: ProtocolConfig = {
-      command,
-      runtimeArgs,
-      runnerScriptPath,
-      beartestModulePath,
-      cwd,
-    };
+    // Show info about how tests will be grouped
+    if (configGroups.size > 1) {
+      const groupDescriptions = Array.from(configGroups.values()).map(
+        (group) =>
+          `  - ${group.files.length} file(s) with ${group.config.command} (pattern: ${group.config.matchedPattern})`
+      );
+      console.log(
+        `Running tests in ${configGroups.size} separate process group(s):\n${groupDescriptions.join("\n")}`
+      );
+    }
 
-    const suiteStack: vscode.TestItem[] = [];
-    const handlers: ProtocolHandlers = {
-      onEvent: async (event) => {
-        handleBeartestEvent({
-          event,
-          run,
-          suiteStack,
-          controller,
-          testItemMap,
-        });
-      },
-      onOutput: (output) => run.appendOutput(normalizeOutput(output)),
-      onComplete: () => {},
-      onError: (error) => {
-        vscode.window.showErrorMessage(
-          `Beartest execution failed: ${error.message}`
-        );
-      },
-      ...(isDebug && {
-        onDebugPort: async (port) => {
-          const debugConfig: vscode.DebugConfiguration = {
-            type: "node",
-            request: "attach",
-            name: "Attach to Beartest",
-            port,
-            skipFiles: ["<node_internals>/**"],
-          };
-          await vscode.debug.startDebugging(undefined, debugConfig);
-        },
-      }),
-    };
+    // Run each configuration group separately
+    for (const { config, files } of configGroups.values()) {
+      if (token.isCancellationRequested) {
+        break;
+      }
 
-    const only = buildOnlyFilter(request);
-    await runWithProtocol(protocolConfig, handlers, testFiles, only, token);
+      await runTestGroup({
+        config,
+        files,
+        request,
+        run,
+        controller,
+        testItemMap,
+        token,
+        isDebug,
+      });
+    }
+
     run.end();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -119,6 +112,75 @@ const executeTests = async (
     vscode.window.showErrorMessage(`${prefix} failed: ${message}`);
     run.end();
   }
+};
+
+/**
+ * Run a group of test files with a specific configuration
+ */
+interface RunTestGroupParams {
+  config: ResolvedTestConfig;
+  files: string[];
+  request: vscode.TestRunRequest;
+  run: vscode.TestRun;
+  controller: vscode.TestController;
+  testItemMap: Map<string, vscode.TestItem>;
+  token: vscode.CancellationToken;
+  isDebug: boolean;
+}
+
+const runTestGroup = async (params: RunTestGroupParams): Promise<void> => {
+  const { config, files, request, run, controller, testItemMap, token, isDebug } = params;
+
+  // Apply debug flag to runtime args
+  const runtimeArgs = isDebug
+    ? [...config.runtimeArgs, "--inspect"]
+    : config.runtimeArgs;
+
+  const beartestModulePath = await findBeartestModule();
+  const runnerScriptPath = path.join(__dirname, "runner.js");
+
+  const protocolConfig: ProtocolConfig = {
+    command: config.command,
+    runtimeArgs,
+    runnerScriptPath,
+    beartestModulePath,
+    cwd: config.cwd,
+  };
+
+  const suiteStack: vscode.TestItem[] = [];
+  const handlers: ProtocolHandlers = {
+    onEvent: async (event) => {
+      handleBeartestEvent({
+        event,
+        run,
+        suiteStack,
+        controller,
+        testItemMap,
+      });
+    },
+    onOutput: (output) => run.appendOutput(normalizeOutput(output)),
+    onComplete: () => {},
+    onError: (error) => {
+      vscode.window.showErrorMessage(
+        `Beartest execution failed: ${error.message}`
+      );
+    },
+    ...(isDebug && {
+      onDebugPort: async (port) => {
+        const debugConfig: vscode.DebugConfiguration = {
+          type: "node",
+          request: "attach",
+          name: "Attach to Beartest",
+          port,
+          skipFiles: ["<node_internals>/**"],
+        };
+        await vscode.debug.startDebugging(undefined, debugConfig);
+      },
+    }),
+  };
+
+  const only = buildOnlyFilter(request);
+  await runWithProtocol(protocolConfig, handlers, files, only, token);
 };
 
 /**
