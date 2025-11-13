@@ -2,7 +2,7 @@
   "name": "beartest-vscode",
   "displayName": "Beartest Test Explorer",
   "description": "VSCode Test Explorer integration for beartest-js",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "publisher": "rubber-duck-software",
   "repository": "https://github.com/rubber-duck-software/beartest-vscode",
   "icon": "./beartest-logo.png",
@@ -26,29 +26,6 @@
     "configuration": {
       "title": "Beartest",
       "properties": {
-        "beartest.testFilePattern": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "default": [
-            "**/*.test.*"
-          ],
-          "description": "Glob patterns for discovering test files"
-        },
-        "beartest.command": {
-          "type": "string",
-          "default": "node",
-          "description": "Command to execute tests (e.g., 'node', 'tsx', 'bun')"
-        },
-        "beartest.runtimeArgs": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "default": [],
-          "description": "Additional arguments passed to the runtime before the test script (e.g., ['--require', './test-setup.js'])"
-        },
         "beartest.configurations": {
           "type": "array",
           "items": {
@@ -56,7 +33,7 @@
             "properties": {
               "pattern": {
                 "type": "string",
-                "description": "Glob pattern to match test file paths (e.g., 'packages/frontend/**', 'backend/**/*.test.ts')"
+                "description": "Glob pattern to match test file paths (e.g., '**/*.test.*', 'packages/frontend/**/*.test.ts')"
               },
               "command": {
                 "type": "string",
@@ -67,6 +44,7 @@
                 "items": {
                   "type": "string"
                 },
+                "default": [],
                 "description": "Additional arguments passed to the runtime before the test script"
               },
               "cwd": {
@@ -76,13 +54,18 @@
             },
             "required": [
               "pattern",
-              "command",
-              "runtimeArgs"
+              "command"
             ]
           },
-          "default": [],
-          "description": "Array of configuration patterns for running tests in different environments (useful for monorepos). Each test file is matched against patterns in order, and the first match is used.",
-          "markdownDescription": "Array of configuration patterns for running tests in different environments.\n\nUseful for monorepos where different packages need different runtime configurations.\n\nExample:\n```json\n[\n  {\n    \"pattern\": \"packages/frontend/**\",\n    \"command\": \"bun\",\n    \"runtimeArgs\": [\"--preload\", \"./setup.ts\"]\n  },\n  {\n    \"pattern\": \"packages/backend/**\",\n    \"command\": \"node\",\n    \"runtimeArgs\": [\"--require\", \"./test-setup.js\"]\n  }\n]\n```"
+          "default": [
+            {
+              "pattern": "**/*.test.*",
+              "command": "node",
+              "runtimeArgs": []
+            }
+          ],
+          "description": "Test configurations that define both which files to discover and how to run them. Each configuration matches files by pattern and specifies the runtime to use.",
+          "markdownDescription": "Test configurations that define both which files to discover and how to run them.\n\nEach configuration matches files by pattern and specifies the runtime to use. Files are matched against patterns in order, using the first match.\n\n**Simple project example:**\n```json\n[\n  {\n    \"pattern\": \"**/*.test.*\",\n    \"command\": \"node\"\n  }\n]\n```\n\n**Monorepo example:**\n```json\n[\n  {\n    \"pattern\": \"packages/frontend/**/*.test.ts\",\n    \"command\": \"tsx\",\n    \"runtimeArgs\": [\"--loader\", \"tsx\"]\n  },\n  {\n    \"pattern\": \"packages/backend/**/*.test.js\",\n    \"command\": \"node\",\n    \"runtimeArgs\": [\"--require\", \"./test-setup.js\"]\n  }\n]\n```"
         }
       }
     }
@@ -93,7 +76,9 @@
     "copy-assets": "cp src/runner.js out/runner.js",
     "watch": "tsc -watch -p ./",
     "pretest": "npm run compile",
-    "lint": "eslint src --ext ts"
+    "lint": "eslint src --ext ts",
+    "vscode:package": "vsce package",
+    "vscode:publish": "vsce publish"
   },
   "devDependencies": {
     "@types/node": "^18.x",

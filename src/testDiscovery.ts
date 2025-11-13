@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import * as path from "path";
 import { testItemData } from "./types";
+import { loadConfigurations } from "./configResolver";
 
 interface TestDiscovery {
   dispose: () => void;
@@ -166,10 +167,17 @@ export const createTestDiscovery = async (
   controller: vscode.TestController,
   workspaceFolder: vscode.WorkspaceFolder
 ): Promise<TestDiscovery> => {
-  // Get test file patterns from configuration
-  const patterns = vscode.workspace
-    .getConfiguration("beartest")
-    .get<string[]>("testFilePattern", ["**/*.test.*"]);
+  // Load configurations - these define both which files to discover and how to run them
+  const configurations = loadConfigurations();
+
+  // Extract unique patterns from configurations
+  const patterns = [...new Set(configurations.map(cfg => cfg.pattern))];
+
+  // If no configurations are defined, use a sensible default
+  if (patterns.length === 0) {
+    patterns.push("**/*.test.*");
+    console.log("Beartest: No configurations defined, using default pattern '**/*.test.*'");
+  }
 
   // Discover existing test files for all patterns
   const fileUriSet = new Set<string>();

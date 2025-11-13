@@ -35,7 +35,17 @@ export const loadConfigurations = (): BeartestConfiguration[] => {
   const config = vscode.workspace.getConfiguration("beartest");
   const configurations = config.get<BeartestConfiguration[]>("configurations", []);
 
-  // Validate configurations
+  // If no configurations are defined, return the default
+  if (configurations.length === 0) {
+    return [{
+      pattern: "**/*.test.*",
+      command: "node",
+      runtimeArgs: []
+    }];
+  }
+
+  // Validate and normalize configurations
+  const normalizedConfigs: BeartestConfiguration[] = [];
   for (const cfg of configurations) {
     if (!cfg.pattern || typeof cfg.pattern !== "string") {
       throw new Error("Each beartest configuration must have a 'pattern' string");
@@ -45,14 +55,17 @@ export const loadConfigurations = (): BeartestConfiguration[] => {
         `Configuration with pattern '${cfg.pattern}' must have a 'command' string`
       );
     }
-    if (!Array.isArray(cfg.runtimeArgs)) {
-      throw new Error(
-        `Configuration with pattern '${cfg.pattern}' must have 'runtimeArgs' as an array`
-      );
-    }
+
+    // Normalize the configuration
+    normalizedConfigs.push({
+      pattern: cfg.pattern,
+      command: cfg.command,
+      runtimeArgs: Array.isArray(cfg.runtimeArgs) ? cfg.runtimeArgs : [],
+      cwd: cfg.cwd
+    });
   }
 
-  return configurations;
+  return normalizedConfigs;
 };
 
 /**

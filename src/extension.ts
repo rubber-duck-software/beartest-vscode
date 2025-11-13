@@ -98,36 +98,22 @@ function validateConfigurations(): void {
   try {
     const configurations = loadConfigurations();
 
-    // Check if configurations array is empty
-    if (configurations.length === 0) {
-      vscode.window.showWarningMessage(
-        'Beartest: No configurations defined. Tests will fail until you add at least one configuration pattern. ' +
-        'Add "beartest.configurations" to your settings.json.'
-      );
-      return;
+    // loadConfigurations now always returns at least the default configuration,
+    // so we check if it's using the default
+    const rawConfigs = vscode.workspace
+      .getConfiguration("beartest")
+      .get<any[]>("configurations", []);
+
+    if (rawConfigs.length === 0) {
+      console.log('Beartest: Using default configuration (pattern: "**/*.test.*", command: "node")');
+    } else {
+      console.log(`Beartest: Loaded ${configurations.length} configuration(s)`);
+
+      // Log the patterns for debugging
+      configurations.forEach((cfg, index) => {
+        console.log(`  ${index + 1}. Pattern: "${cfg.pattern}", Command: "${cfg.command}"`);
+      });
     }
-
-    // Validate each configuration
-    const issues: string[] = [];
-    configurations.forEach((cfg, index) => {
-      if (!cfg.pattern) {
-        issues.push(`Configuration ${index + 1}: missing 'pattern'`);
-      }
-      if (!cfg.command) {
-        issues.push(`Configuration ${index + 1}: missing 'command'`);
-      }
-      if (!cfg.runtimeArgs || !Array.isArray(cfg.runtimeArgs)) {
-        issues.push(`Configuration ${index + 1}: 'runtimeArgs' must be an array`);
-      }
-    });
-
-    if (issues.length > 0) {
-      vscode.window.showErrorMessage(
-        `Beartest configuration errors:\n${issues.join('\n')}`
-      );
-    }
-
-    console.log(`Beartest: Loaded ${configurations.length} configuration(s)`);
   } catch (error) {
     vscode.window.showErrorMessage(
       `Beartest configuration validation failed: ${
